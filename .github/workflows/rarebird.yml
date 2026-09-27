@@ -1,0 +1,53 @@
+# レアバード・スコープ: 10分おきに撮影予報を更新して、site ブランチ（GitHub Pages）に公開する
+name: rarebird
+
+on:
+  schedule:
+    - cron: "3-59/10 * * * *"   # 10分おき（GitHub側の混雑で数分遅れることがあります）
+  workflow_dispatch: {}          # 「Run workflow」ボタンで手動実行もできる
+
+permissions:
+  contents: write
+
+concurrency:
+  group: rarebird
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 9
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 前回の状態を読み込む
+        run: |
+          git clone -q --depth 1 --branch site \
+            "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${GITHUB_REPOSITORY}.git" site \
+            || mkdir -p site
+          rm -rf site/.git
+
+      - name: 撮影予報を計算する
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          TZ: Asia/Tokyo
+        run: python3 rarebird.py --site site
+
+      - name: 公開する
+        run: |
+          cd site
+          git init -q -b site
+          git config user.name "rarebird-bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -qm "update $(date -u +%Y-%m-%dT%H:%MZ)"
+          git push -qf "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${GITHUB_REPOSITORY}.git" site
+
+      - name: 月1回の生存記録（60日間動きのないリポジトリは定期実行が止められるため）
+        run: |
+          if [ "$(date -u +%d)" = "01" ] && ! grep -qs "$(date -u +%Y-%m)" .keepalive; then
+            date -u +%Y-%m > .keepalive
+            git config user.name "rarebird-bot"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add .keepalive && git commit -qm "keepalive $(date -u +%Y-%m)" && git push -q
+          fi
