@@ -1,0 +1,23 @@
+{
+  "airports": [
+    "RJTT",
+    "RJAA"
+  ],
+  "extra_rare_types": [],
+  "not_rare_types": [],
+  "pinned_regs": {
+    "80-1111": "政府専用機（B777-300ER）",
+    "80-1112": "政府専用機（B777-300ER）",
+    "JA381A": "ANA FLYING HONU 1号機（A380）",
+    "JA382A": "ANA FLYING HONU 2号機（A380）",
+    "JA383A": "ANA FLYING HONU 3号機（A380）"
+  },
+  "ignored_regs": [],
+  "notify": {
+    "morning_hour": 6,
+    "evening_hour": 21,
+    "live_minutes": 90,
+    "quiet_start": 23,
+    "quiet_end": 5
+  }
+}

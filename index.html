@@ -1,0 +1,508 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>レアバード・スコープ</title>
+<meta name="description" content="羽田・成田に今日明日来る特別塗装機・レア機材の撮影予報">
+<meta name="theme-color" content="#101820">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Zen+Kaku+Gothic+New:wght@400;500;700;900&family=Roboto+Mono:wght@400;500;700&display=swap">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<style>
+:root{
+  --ground:#E8ECEF;--panel:#FFFFFF;--raised:#F2F5F7;--ink:#14202A;--muted:#566878;--line:#D2D9DF;--line-soft:#E4E9ED;
+  --amber:#8F5F04;--amber-bg:#FBF0D8;--amber-edge:#E0B65C;--amber-solid:#E39A14;
+  --verm:#B23A28;--verm-bg:#FBE6E2;--verm-edge:#E09B8D;
+  --teal:#146F6A;--teal-bg:#DDF0EE;--teal-edge:#7FC3BD;
+  --steel:#36699A;--steel-bg:#E3ECF5;--steel-soft:#9DB5C9;
+  --cfg-n:#4F84B0;--cfg-s:#2F9A93;--cfg-s2:#C98A2B;--cfg-x:#A9B5BF;
+  --good:#2E7D4F;--fair:#8A7A2E;--poor:#B23A28;
+  --shadow:0 1px 2px rgba(20,32,42,.07),0 6px 16px rgba(20,32,42,.05);
+  --f-ui:"Zen Kaku Gothic New","Hiragino Kaku Gothic ProN","Yu Gothic","Noto Sans JP",system-ui,sans-serif;
+  --f-data:"Roboto Mono",ui-monospace,"SFMono-Regular",Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --ground:#101820;--panel:#18232E;--raised:#22303D;--ink:#DFE8EF;--muted:#8699A8;--line:#2E3E4C;--line-soft:#243240;
+  --amber:#F2A71B;--amber-bg:#2E2413;--amber-edge:#6B5416;--amber-solid:#F2A71B;
+  --verm:#F07A62;--verm-bg:#2F1C18;--verm-edge:#6E3628;
+  --teal:#48C3BA;--teal-bg:#122A29;--teal-edge:#2A5F5B;
+  --steel:#6FA4CE;--steel-bg:#1B2A38;--steel-soft:#3E566B;
+  --cfg-n:#5E93BF;--cfg-s:#3FB0A8;--cfg-s2:#D9A043;--cfg-x:#4A5A68;
+  --good:#5CC48A;--fair:#C9B458;--poor:#F07A62;
+  --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px rgba(0,0,0,.25);
+}}
+:root[data-theme="dark"]{
+  --ground:#101820;--panel:#18232E;--raised:#22303D;--ink:#DFE8EF;--muted:#8699A8;--line:#2E3E4C;--line-soft:#243240;
+  --amber:#F2A71B;--amber-bg:#2E2413;--amber-edge:#6B5416;--amber-solid:#F2A71B;
+  --verm:#F07A62;--verm-bg:#2F1C18;--verm-edge:#6E3628;
+  --teal:#48C3BA;--teal-bg:#122A29;--teal-edge:#2A5F5B;
+  --steel:#6FA4CE;--steel-bg:#1B2A38;--steel-soft:#3E566B;
+  --cfg-n:#5E93BF;--cfg-s:#3FB0A8;--cfg-s2:#D9A043;--cfg-x:#4A5A68;
+  --good:#5CC48A;--fair:#C9B458;--poor:#F07A62;
+  --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px rgba(0,0,0,.25);
+}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+html,body{background:var(--ground)}
+body{margin:0;font-family:var(--f-ui);color:var(--ink);line-height:1.65;-webkit-font-smoothing:antialiased;font-size:14px}
+.wrap{max-width:760px;margin:0 auto;padding-inline:16px;padding-block:0 64px}
+a{color:var(--steel)}
+button{font-family:inherit}
+:focus-visible{outline:2px solid var(--amber-solid);outline-offset:2px;border-radius:4px}
+
+/* header */
+.hdr{position:sticky;top:0;z-index:30;background:color-mix(in srgb,var(--ground) 92%,transparent);backdrop-filter:blur(10px);border-bottom:1px solid var(--line);padding-top:env(safe-area-inset-top,0px)}
+.hdr-in{max-width:760px;margin:0 auto;padding:10px 16px 10px;display:grid;gap:8px}
+.hdr-top{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+.mark{font-weight:900;font-size:18px;letter-spacing:.06em;margin:0}
+.mark b{color:var(--amber-solid);font-weight:900}
+.upd{margin-left:auto;font-family:var(--f-data);font-size:11px;color:var(--muted)}
+.seg{display:flex;gap:6px;flex-wrap:wrap}
+.seg button{border:1px solid var(--line);background:var(--panel);color:var(--ink);border-radius:999px;padding:5px 13px;font-size:13px;font-weight:700;cursor:pointer}
+.seg button[aria-pressed="true"]{background:var(--ink);color:var(--ground);border-color:var(--ink)}
+.seg .sep{width:1px;background:var(--line);margin:2px 4px}
+
+/* notices */
+.notice{margin-top:14px;padding:10px 12px;border-radius:6px;font-size:12.5px;border:1px solid var(--line);background:var(--panel)}
+.notice.warn{border-color:var(--verm-edge);background:var(--verm-bg)}
+.notice.info{border-color:var(--amber-edge);background:var(--amber-bg)}
+
+section{margin-top:26px}
+.eyebrow{font-family:var(--f-data);font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:var(--muted)}
+h2{font-size:15px;margin:0;letter-spacing:.04em;text-wrap:balance}
+.sec-head{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:10px}
+.sec-note{font-size:12px;color:var(--muted)}
+
+/* summary */
+.sum{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:16px 16px 14px;box-shadow:var(--shadow);margin-top:16px}
+.sum-date{font-size:13px;color:var(--muted);font-weight:700}
+.sum-when{font-size:22px;font-weight:900;letter-spacing:.02em;line-height:1.35;margin:4px 0 2px;text-wrap:balance}
+.sum-when small{display:block;font-size:13px;font-weight:500;color:var(--muted);letter-spacing:0;margin-top:3px}
+.counts{display:flex;gap:6px;flex-wrap:wrap;margin:10px 0 12px}
+.pill{font-size:11.5px;font-weight:700;border-radius:4px;padding:2px 8px;border:1px solid var(--line);white-space:nowrap}
+.pill.c1{background:var(--amber-solid);border-color:var(--amber-solid);color:#1b1305}
+.pill.c2{background:var(--amber-bg);border-color:var(--amber-edge);color:var(--amber)}
+.pill.c3{background:transparent;border-style:dashed;color:var(--muted)}
+.facts{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;font-size:13px}
+.facts dt{color:var(--muted);font-size:12px;padding-top:1px}
+.facts dd{margin:0}
+
+/* timeline */
+.tl{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px 10px 8px;box-shadow:var(--shadow)}
+.tl svg{display:block;width:100%;height:auto}
+.tl-leg{display:flex;gap:12px;flex-wrap:wrap;font-size:11px;color:var(--muted);padding:6px 4px 0}
+.tl-leg i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:4px;vertical-align:-1px}
+.filter{display:flex;gap:8px;align-items:center;margin:10px 0 0;font-size:12.5px}
+.filter button{border:1px solid var(--line);background:var(--raised);color:var(--ink);border-radius:4px;padding:3px 10px;cursor:pointer;font-size:12px}
+
+/* events */
+.evs{display:flex;flex-direction:column;gap:9px}
+.ev{background:var(--panel);border:1px solid var(--line);border-left:4px solid var(--steel-soft);border-radius:6px;padding:11px 13px;box-shadow:var(--shadow);display:grid;grid-template-columns:62px 1fr;gap:2px 12px}
+.ev[data-cat="watch"]{border-left-color:var(--amber-solid)}
+.ev[data-cat="type"]{border-left-color:var(--amber-edge)}
+.ev[data-cat="mil"]{border-left-color:var(--verm)}
+.ev[data-cat="op"]{border-left-color:var(--teal)}
+.ev[data-conf="傾向"]{border-left-style:dashed}
+.ev.past{opacity:.55}
+.ev-time{font-family:var(--f-data);font-weight:700;font-size:17px;line-height:1.2;font-variant-numeric:tabular-nums}
+.ev-time small{display:block;font-size:10.5px;font-weight:500;color:var(--muted);margin-top:2px}
+.ev-dir{display:inline-block;font-size:11px;font-weight:700;border-radius:3px;padding:0 5px;margin-top:4px;border:1px solid var(--line);color:var(--muted)}
+.ev-dir.arr{color:var(--steel);border-color:var(--steel-soft)}
+.ev-dir.dep{color:var(--teal);border-color:var(--teal-edge)}
+.ev-main{min-width:0}
+.ev-line1{display:flex;gap:8px;align-items:baseline;flex-wrap:wrap}
+.reg{font-family:var(--f-data);font-weight:700;font-size:15px;letter-spacing:.03em}
+.actype{font-family:var(--f-data);font-size:11.5px;color:var(--muted);border:1px solid var(--line);border-radius:3px;padding:0 5px}
+.ev-line1 .pill{margin-left:auto}
+.ev-name{font-size:13.5px;font-weight:700;margin-top:1px}
+.ev-route{font-family:var(--f-data);font-size:12.5px;color:var(--ink);margin-top:2px}
+.ev-why{font-size:12px;color:var(--muted);margin-top:3px}
+.ev-meta{display:flex;gap:6px 12px;flex-wrap:wrap;font-size:12px;margin-top:6px;align-items:center}
+.ev-meta .rw{font-family:var(--f-data);font-weight:700}
+.chip{font-size:11px;border-radius:3px;padding:1px 6px;border:1px solid var(--line);color:var(--muted);white-space:nowrap}
+.hrs{display:flex;gap:5px;flex-wrap:wrap;margin-top:6px}
+.hrs .chip{font-family:var(--f-data);color:var(--ink)}
+.links{display:flex;gap:12px;margin-left:auto}
+.links a{font-size:12px;text-decoration:none;border-bottom:1px solid var(--steel-soft)}
+.sh-good{color:var(--good)}.sh-fair{color:var(--fair)}.sh-poor{color:var(--poor)}
+.empty{border:1px dashed var(--line);border-radius:6px;padding:20px 14px;text-align:center;color:var(--muted);font-size:13px}
+details.past-box{margin-top:10px}
+details.past-box summary{cursor:pointer;font-size:12.5px;color:var(--muted);padding:4px 0}
+
+/* now */
+.now{display:grid;gap:10px}
+.box{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px 14px;box-shadow:var(--shadow)}
+.rw-now{font-size:16px;font-weight:900}
+.rw-now small{font-size:12px;font-weight:500;color:var(--muted);margin-left:6px}
+.mono{font-family:var(--f-data);font-size:12px;word-break:break-all;color:var(--muted)}
+#map{height:340px;border-radius:8px;border:1px solid var(--line);background:var(--raised);overflow:hidden}
+.dark-tiles .leaflet-tile{filter:invert(1) hue-rotate(180deg) brightness(.82) contrast(.9)}
+.plane-lbl{font-family:var(--f-data);font-size:10px;font-weight:700;color:var(--amber);text-shadow:0 0 3px var(--panel),0 0 3px var(--panel);white-space:nowrap}
+
+/* registry */
+.reg-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:6px;margin-top:8px}
+.reg-item{border:1px solid var(--line);border-radius:5px;padding:6px 9px;background:var(--raised)}
+.reg-item b{font-family:var(--f-data);font-size:12.5px;display:block}
+.reg-item span{font-size:11.5px;color:var(--muted)}
+.log{width:100%;border-collapse:collapse;font-size:12px;margin-top:10px}
+.log td{padding:6px 6px;border-top:1px solid var(--line-soft);vertical-align:top}
+.log td:first-child{font-family:var(--f-data);white-space:nowrap;color:var(--muted)}
+.add{color:var(--good);font-weight:700}.rm{color:var(--verm);font-weight:700}
+
+/* settings */
+.set label{display:flex;gap:8px;align-items:center;font-size:13px;margin:6px 0}
+.foot{margin-top:34px;padding-top:14px;border-top:1px solid var(--line);font-size:11.5px;color:var(--muted)}
+.foot p{margin:.4em 0}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style>
+</head>
+<body>
+<header class="hdr">
+  <div class="hdr-in">
+    <div class="hdr-top">
+      <h1 class="mark">レアバード<b>・</b>スコープ</h1>
+      <span class="upd" id="upd">読み込み中…</span>
+    </div>
+    <div class="seg" id="segs" role="group" aria-label="空港と日付"></div>
+  </div>
+</header>
+
+<main class="wrap">
+  <div id="notices"></div>
+
+  <div class="sum" id="sum"></div>
+
+  <section>
+    <div class="sec-head"><div><div class="eyebrow">Timeline</div><h2>時間帯の見通し</h2></div>
+      <span class="sec-note">棒をタップするとその時間帯の便だけ表示</span></div>
+    <div class="tl">
+      <svg id="tl" viewBox="0 0 380 132" role="img" aria-label="時間帯ごとの注目度・滑走路運用・天気"></svg>
+      <div class="tl-leg">
+        <span><i style="background:var(--amber-solid)"></i>確定・有力</span>
+        <span><i style="background:var(--amber-edge);opacity:.55"></i>傾向を含む</span>
+        <span><i style="background:var(--cfg-n)"></i>北風</span>
+        <span><i style="background:var(--cfg-s)"></i>南風</span>
+        <span id="leg-s2"><i style="background:var(--cfg-s2)"></i>南風・都心経路</span>
+      </div>
+    </div>
+    <div class="filter" id="filter" hidden><span id="filter-txt"></span><button type="button" id="filter-clear">すべて表示</button></div>
+  </section>
+
+  <section>
+    <div class="sec-head"><div><div class="eyebrow">Schedule</div><h2 id="ev-title">注目の発着</h2></div>
+      <span class="sec-note" id="ev-note"></span></div>
+    <div class="evs" id="evs"></div>
+    <details class="past-box" id="past-box" hidden><summary id="past-sum"></summary><div class="evs" id="evs-past" style="margin-top:8px"></div></details>
+  </section>
+
+  <section id="now-sec">
+    <div class="sec-head"><div><div class="eyebrow">Now</div><h2>いまの運用と空</h2></div>
+      <span class="sec-note" id="live-note"></span></div>
+    <div class="now">
+      <div class="box" id="now-box"></div>
+      <div id="map" role="img" aria-label="周辺の航空機の位置"></div>
+      <div class="tl-leg"><span><i style="background:var(--amber-solid)"></i>特別塗装機・希少機種</span><span><i style="background:var(--verm)"></i>軍用・政府</span><span><i style="background:var(--teal)"></i>珍しい運航者</span><span><i style="background:var(--steel-soft)"></i>その他</span></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head"><div><div class="eyebrow">Registry</div><h2>監視している特別塗装機など</h2></div>
+      <span class="sec-note" id="reg-note"></span></div>
+    <div class="box">
+      <details><summary id="reg-sum" style="cursor:pointer;font-size:13px"></summary><div class="reg-list" id="reg-list"></div></details>
+      <table class="log" id="reg-log"></table>
+      <p class="sec-note" id="pa-note" style="margin:.8em 0 0"></p>
+      <details id="pa-reg" hidden><summary style="cursor:pointer;font-size:13px" id="pa-reg-sum"></summary><div class="reg-list" id="pa-reg-list"></div></details>
+    </div>
+  </section>
+
+  <section class="set">
+    <div class="sec-head"><div><div class="eyebrow">Settings</div><h2>表示の設定</h2></div></div>
+    <div class="box">
+      <label><input type="checkbox" id="opt-op"> 「珍しい運航者」（定期便の外国航空会社など）も表示する</label>
+      <label><input type="checkbox" id="opt-trend" checked> 「傾向」（過去の実績からの推定）も表示する</label>
+      <p class="sec-note" style="margin:.6em 0 0">通知: スマホに「ntfy」アプリを入れ、GitHub の Secrets に設定したトピック名を購読すると、前夜21時に翌日の予報、朝6時に当日の予報が届きます。注目機は、相手国を出発して到着が確定した時点で1回、さらに約90分前にもう1回通知します（23〜5時に確定したものは朝に送ります）。</p>
+    </div>
+  </section>
+
+  <footer class="foot">
+    <p><b>確定</b> = ADS-Bで実際に飛行中（相手国を出発済み）・発着を確認　<b>有力</b> = 時刻表と過去の機材実績・曜日パターンから高い確度　<b>傾向</b> = 過去の実績からの推定（当日の割当ては変わりうる）</p>
+    <p>特別塗装機がどの便に入るかは、航空会社が当日まで決めないことがあります。明日の特別塗装機は「来る確率と時間帯」までが限界で、当日の朝に飛び始めると「確定・有力」に切り替わります。</p>
+    <p>滑走路は予報風と公式の運用ルールからの予測です。直近2時間は、実際に進入中の機体の向きから判定した運用を使います。</p>
+    <p>データ: <a href="https://adsb.lol">adsb.lol</a>（ODbL）・<a href="https://github.com/sdr-enthusiasts/plane-alert-db">Plane-Alert-DB</a>（ODbL）・<a href="https://tokyo-haneda.com">羽田空港旅客ターミナル</a>・<a href="https://aviationweather.gov">aviationweather.gov</a>・<a href="https://open-meteo.com">Open-Meteo</a>・地図 <a href="https://maps.gsi.go.jp/development/ichiran.html">地理院タイル</a></p>
+    <p id="ver"></p>
+  </footer>
+</main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+(function(){
+"use strict";
+var $=function(id){return document.getElementById(id)};
+function el(tag,cls,txt){var n=document.createElement(tag);if(cls)n.className=cls;if(txt!=null)n.textContent=txt;return n}
+function ls(k,v){try{if(v===undefined)return localStorage.getItem(k);localStorage.setItem(k,v)}catch(e){return null}}
+
+var PLAN=null,LIVE=null,S={ap:null,day:null,hour:null};
+var WD="日月火水木金土";
+var CONF_CLS={"確定":"c1","有力":"c2","傾向":"c3"};
+var CAT_LABEL={watch:"特別塗装機",type:"希少機種",mil:"軍用・政府",op:"珍しい運航者"};
+var SHOOT={good:["◎","sh-good","撮影日和"],fair:["○","sh-fair","まずまず"],poor:["△","sh-poor","雨・視界不良の恐れ"],"?":["－","","予報なし"]};
+
+function fetchJSON(u){return fetch(u+(u.indexOf("?")<0?"?":"&")+"t="+Date.now(),{cache:"no-store"}).then(function(r){if(!r.ok)throw new Error(r.status);return r.json()})}
+function load(){
+  if(window.RB_PLAN){PLAN=window.RB_PLAN;LIVE=window.RB_LIVE||null;return Promise.resolve()}
+  return Promise.all([fetchJSON("data/plan.json"),fetchJSON("data/live.json").catch(function(){return null})])
+    .then(function(r){PLAN=r[0];LIVE=r[1]});
+}
+function fmtDate(iso){var d=new Date(iso+"T00:00:00+09:00");return (d.getMonth()+1)+"/"+d.getDate()+"（"+WD[d.getDay()]+"）"}
+function fmtGen(iso){try{var d=new Date(iso);return d.toLocaleString("ja-JP",{timeZone:"Asia/Tokyo",month:"numeric",day:"numeric",hour:"2-digit",minute:"2-digit"})}catch(e){return iso}}
+
+function nowDate(){return window.RB_PREVIEW&&PLAN&&PLAN.generated?new Date(PLAN.generated):new Date()}
+function jstHour(d){return Number(d.toLocaleString("en-US",{timeZone:"Asia/Tokyo",hour:"numeric",hour12:false}))%24}
+function pickDefaults(){
+  var aps=Object.keys(PLAN.airports);
+  var saved=ls("rb.ap");
+  S.ap=(saved&&PLAN.airports[saved])?saved:aps[0];
+  var days=Object.keys(PLAN.airports[S.ap].days);
+  var h=jstHour(nowDate());
+  S.day=(h>=18&&days[1])?days[1]:days[0];
+  $("opt-op").checked=ls("rb.op")==="1";
+  $("opt-trend").checked=ls("rb.trend")!=="0";
+}
+
+function renderSegs(){
+  var box=$("segs");box.textContent="";
+  Object.keys(PLAN.airports).forEach(function(ic){
+    var b=el("button",null,PLAN.airports[ic].name);b.type="button";b.setAttribute("aria-pressed",String(ic===S.ap));
+    b.onclick=function(){S.ap=ic;ls("rb.ap",ic);S.hour=null;renderAll()};box.appendChild(b);
+  });
+  box.appendChild(el("span","sep"));
+  var ap=PLAN.airports[S.ap];
+  Object.keys(ap.days).forEach(function(d){
+    var b=el("button",null,ap.days[d].label+" "+fmtDate(d).replace(/（.*/,""));b.type="button";b.setAttribute("aria-pressed",String(d===S.day));
+    b.onclick=function(){S.day=d;S.hour=null;renderAll()};box.appendChild(b);
+  });
+}
+
+function renderNotices(){
+  var box=$("notices");box.textContent="";
+  var st=PLAN.status||{};
+  if(window.RB_PREVIEW){var n=el("div","notice info");n.innerHTML="<b>表示例です（いまの実況ではありません）。</b>「<b>"+fmtGen(PLAN.generated)+"</b>」の時点を想定した試験用の場面で、画面上の「今日」「いま」「飛行中」はすべてこの想定時刻が基準です。羽田の時刻表と気象の一部は実データですが、特別塗装機の飛行状況・滑走路の運用状況・過去の履歴は<b>架空</b>です。本物は GitHub に設置すると10分おきに実際の状況で更新されます。";box.appendChild(n)}
+  if(st.config_error){box.appendChild(el("div","notice warn","設定ファイルの問題: "+st.config_error))}
+  if(st.errors&&st.errors.length){box.appendChild(el("div","notice warn","一部のデータを取得できませんでした（"+st.errors.length+"件）。表示は取得できた分と前回の結果です。"))}
+  var gen=new Date(PLAN.generated).getTime();
+  if(!window.RB_PREVIEW&&Date.now()-gen>40*60*1000){box.appendChild(el("div","notice warn","最終更新から40分以上経っています。自動更新が止まっている可能性があります。"))}
+  var L=PLAN.learning||{};
+  if(!window.RB_PREVIEW&&(L.days||0)<7){box.appendChild(el("div","notice info","学習中（観測 "+(L.days||0)+"日分）。「明日」の予測は観測が1〜2週間たまるほど充実します。"))}
+}
+
+function visible(e){
+  if(e.cat==="op"&&!$("opt-op").checked)return false;
+  if(e.conf==="傾向"&&!$("opt-trend").checked)return false;
+  return true;
+}
+
+function renderSummary(){
+  var ap=PLAN.airports[S.ap],day=ap.days[S.day],s=day.summary,box=$("sum");box.textContent="";
+  box.appendChild(el("div","sum-date",day.label+" "+fmtDate(S.day)+" ・ "+ap.name));
+  var w=el("div","sum-when",s.when);
+  if(s.whenAll&&s.whenAll!==s.when){w.appendChild(el("small",null,"「傾向」まで含めると "+s.whenAll))}
+  box.appendChild(w);
+  var c=el("div","counts");
+  ["確定","有力","傾向"].forEach(function(k){c.appendChild(el("span","pill "+CONF_CLS[k],k+" "+(s.counts[k]||0)))});
+  box.appendChild(c);
+  var dl=el("dl","facts");
+  function row(k,v){dl.appendChild(el("dt",null,k));var dd=el("dd",null,v);dl.appendChild(dd);return dd}
+  row("滑走路",s.runway||"－");
+  var cfgs=ap.configs||{};var used={};day.hours.slice(5).forEach(function(h){used[h.cfg]=1});
+  var pairs=Object.keys(used).filter(function(k){return cfgs[k]&&cfgs[k].arr}).map(function(k){return (cfgs[k].short||cfgs[k].label)+"＝着"+cfgs[k].arr+"・発"+cfgs[k].dep});
+  if(pairs.length)row("",pairs.join(" ／ ")).style.cssText="font-size:12px;color:var(--muted)";
+  row("天気",s.weather+(day.sun&&day.sun.rise?"　日の出 "+day.sun.rise.slice(11,16)+"・日の入 "+day.sun.set.slice(11,16):""));
+  box.appendChild(dl);
+}
+
+function renderTimeline(){
+  var ap=PLAN.airports[S.ap],day=ap.days[S.day],s=day.summary,svg=$("tl");
+  var NS="http://www.w3.org/2000/svg";svg.textContent="";
+  var H0=5,H1=24,W=380,cw=W/(H1-H0);
+  function add(tag,a,txt){var n=document.createElementNS(NS,tag);for(var k in a)n.setAttribute(k,a[k]);if(txt!=null)n.textContent=txt;svg.appendChild(n);return n}
+  var all=s.weights||[],firm=s.weightsFirm||[];
+  var mx=Math.max(1,Math.max.apply(null,all.slice(H0,H1)));
+  var used=false;
+  for(var h=H0;h<H1;h++){
+    var x=(h-H0)*cw,a=all[h]||0,f=firm[h]||0,ha=a/mx*58,hf=f/mx*58;
+    var g=document.createElementNS(NS,"g");g.style.cursor="pointer";g.setAttribute("data-h",h);
+    var hit=document.createElementNS(NS,"rect");hit.setAttribute("x",x);hit.setAttribute("y",0);hit.setAttribute("width",cw);hit.setAttribute("height",64);hit.setAttribute("fill","transparent");g.appendChild(hit);
+    if(S.hour===h){var hl=document.createElementNS(NS,"rect");hl.setAttribute("x",x);hl.setAttribute("y",0);hl.setAttribute("width",cw);hl.setAttribute("height",64);hl.setAttribute("fill","var(--raised)");g.appendChild(hl)}
+    if(ha>0){var r1=document.createElementNS(NS,"rect");r1.setAttribute("x",x+2);r1.setAttribute("y",62-ha);r1.setAttribute("width",cw-4);r1.setAttribute("height",ha);r1.setAttribute("rx",2);r1.setAttribute("fill","var(--amber-edge)");r1.setAttribute("opacity",".55");g.appendChild(r1)}
+    if(hf>0){var r2=document.createElementNS(NS,"rect");r2.setAttribute("x",x+2);r2.setAttribute("y",62-hf);r2.setAttribute("width",cw-4);r2.setAttribute("height",hf);r2.setAttribute("rx",2);r2.setAttribute("fill","var(--amber-solid)");g.appendChild(r2)}
+    (function(hh){g.addEventListener("click",function(){S.hour=(S.hour===hh?null:hh);renderTimeline();renderEvents()})})(h);
+    svg.appendChild(g);
+    var row=day.hours[h]||{};
+    var col={N:"var(--cfg-n)",S:"var(--cfg-s)",S2:"var(--cfg-s2)"}[row.cfg]||"var(--cfg-x)";
+    if(row.cfg==="S2")used=true;
+    add("rect",{x:x+.5,y:68,width:cw-1,height:10,fill:col,opacity:(row.cfgConf==="風弱く切替の可能性"||row.cfgConf==="未確定")?".45":"1"});
+    var sh=SHOOT[row.shoot||"?"];
+    add("text",{x:x+cw/2,y:97,"text-anchor":"middle","font-size":11,fill:sh[1]?"var(--"+(row.shoot)+")":"var(--muted)","font-family":"var(--f-data)"},sh[0]);
+    if(row.wdir!=null&&row.wspd!=null&&h%2===1){
+      var cx=x+cw/2,cy=110,ang=(row.wdir+180)%360;
+      var ar=add("path",{d:"M0,-5 L3,3 L0,1.5 L-3,3 Z",fill:"var(--muted)",transform:"translate("+cx+","+cy+") rotate("+ang+")"});
+    }
+    if(h%3===0)add("text",{x:x+cw/2,y:128,"text-anchor":"middle","font-size":10,fill:"var(--muted)","font-family":"var(--f-data)"},h+"時");
+  }
+  add("line",{x1:0,y1:62.5,x2:W,y2:62.5,stroke:"var(--line)"});
+  // 現在時刻
+  if(day.label==="今日"){
+    var now=nowDate(),hh=jstHour(now),mm=now.getMinutes();
+    if(hh>=H0&&hh<H1){var nx=(hh-H0+mm/60)*cw;add("line",{x1:nx,y1:0,x2:nx,y2:82,stroke:"var(--verm)","stroke-width":1.2,"stroke-dasharray":"3 2"})}
+  }
+  $("leg-s2").hidden=!used;
+}
+
+function evCard(e,ap){
+  var c=el("article","ev"+(e.past?" past":""));c.setAttribute("data-cat",e.cat);c.setAttribute("data-conf",e.conf);
+  var t=el("div","ev-time");
+  if(e.time){t.textContent=(e.approx?"~":"")+e.time;if(e.sched&&e.sched!==e.time)t.appendChild(el("small",null,"定刻 "+e.sched))}
+  else{t.textContent="随時";t.appendChild(el("small",null,"傾向"))}
+  var dirTxt={arr:"着",dep:"発",ground:"駐機",both:"発着"}[e.dir]||"";
+  var d=el("span","ev-dir "+(e.dir||""),dirTxt);var tw=el("div");tw.appendChild(t);tw.appendChild(d);c.appendChild(tw);
+  var m=el("div","ev-main");
+  var l1=el("div","ev-line1");
+  l1.appendChild(el("span","reg",e.reg||e.fl||"－"));
+  if(e.type&&e.type!=="----")l1.appendChild(el("span","actype",e.type));
+  l1.appendChild(el("span","pill "+CONF_CLS[e.conf],e.conf));
+  m.appendChild(l1);
+  var nm=e.name||CAT_LABEL[e.cat]||"";
+  if(nm)m.appendChild(el("div","ev-name",nm));
+  var route=[];
+  if(e.fl&&e.reg)route.push(e.fl);
+  if(e.other)route.push((e.dir==="arr"?"← ":e.dir==="dep"?"→ ":"")+e.other);
+  if(e.status)route.push(e.status);
+  if(route.length)m.appendChild(el("div","ev-route",route.join("　")));
+  if(e.hoursDetail&&e.hoursDetail.length){
+    var hr=el("div","hrs");
+    if(e.ratio!=null)hr.appendChild(el("span","chip","来る確率 "+Math.round(e.ratio*100)+"%"));
+    e.hoursDetail.forEach(function(x){hr.appendChild(el("span","chip",x.h+"時台 "+(x.dir==="arr"?"着":x.dir==="dep"?"発":"発着")))});
+    m.appendChild(hr);
+  }
+  if(e.reason)m.appendChild(el("div","ev-why",e.reason));
+  var meta=el("div","ev-meta");
+  var rw=el("span");rw.appendChild(document.createTextNode("滑走路 "));rw.appendChild(el("span","rw",e.rwy||"－"));
+  if(e.rwyConf)rw.appendChild(document.createTextNode("（"+e.rwyConf+"）"));meta.appendChild(rw);
+  var sh=SHOOT[e.shoot||"?"];if(e.shoot&&e.shoot!=="?"){var s=el("span",sh[1],"天気 "+sh[0]+" "+sh[2]);meta.appendChild(s)}
+  var lk=el("span","links");
+  if(e.hex){var a=el("a",null,"地図で追う");a.href="https://globe.adsb.lol/?icao="+encodeURIComponent(e.hex);a.target="_blank";a.rel="noopener";lk.appendChild(a)}
+  if(e.reg&&/^[A-Z0-9-]{4,8}$/.test(e.reg)){var b=el("a",null,"機体を調べる");b.href="https://www.flightradar24.com/data/aircraft/"+encodeURIComponent(e.reg.toLowerCase());b.target="_blank";b.rel="noopener";lk.appendChild(b)}
+  if(lk.childNodes.length)meta.appendChild(lk);
+  m.appendChild(meta);
+  c.appendChild(m);
+  return c;
+}
+
+function renderEvents(){
+  var ap=PLAN.airports[S.ap],day=ap.days[S.day];
+  var evs=day.events.filter(visible);
+  if(S.hour!=null){evs=evs.filter(function(e){return (e.hours||[]).indexOf(S.hour)>=0||(e.hoursDetail||[]).some(function(x){return x.h===S.hour})});
+    $("filter").hidden=false;$("filter-txt").textContent=S.hour+"時台の予定 "+evs.length+"件";}
+  else $("filter").hidden=true;
+  var up=evs.filter(function(e){return !e.past}),past=evs.filter(function(e){return e.past});
+  var box=$("evs");box.textContent="";
+  if(!up.length){box.appendChild(el("div","empty",S.hour!=null?"この時間帯の予定はありません。":"注目機の予定は今のところ見つかっていません。当日の朝に飛び始めると表示されます。"))}
+  up.forEach(function(e){box.appendChild(evCard(e,ap))});
+  var pb=$("past-box"),pbox=$("evs-past");pbox.textContent="";
+  pb.hidden=!past.length;$("past-sum").textContent="済んだ便 "+past.length+"件";
+  past.forEach(function(e){pbox.appendChild(evCard(e,ap))});
+  $("ev-note").textContent=ap.timetable?"羽田は公式時刻表と照合":"成田は観測実績と経路情報から推定";
+}
+
+var MAP=null,LAYER=null;
+function renderNow(){
+  var ap=PLAN.airports[S.ap],day=ap.days[S.day];
+  $("now-sec").hidden=day.label!=="今日";
+  if(day.label!=="今日")return;
+  var box=$("now-box");box.textContent="";
+  if(window.RB_PREVIEW)box.appendChild(el("div","notice info","想定時刻 "+fmtGen(PLAN.generated)+" の架空の場面です（実況ではありません）"));
+  var n=ap.now||{};
+  var rw=el("div","rw-now");
+  if(n.runway){rw.textContent=n.runway.label;var cf=(ap.configs||{})[n.runway.code];
+    rw.appendChild(el("small",null,(cf&&cf.arr?"着陸"+cf.arr+"・離陸"+cf.dep+"　":"")+n.runway.at+" 時点の実測"));}
+  else rw.textContent="運用を判定できる機体がまだ見えていません";
+  box.appendChild(rw);
+  if(n.metar){var m=n.metar;var w=(m.wdir==null?"":(typeof m.wdir==="number"?m.wdir+"°":"風向不定"))+(m.wspd!=null?" "+m.wspd+"kt":"");
+    box.appendChild(el("div",null,"風 "+w+(m.wgst?"（最大"+m.wgst+"kt）":"")+(m.temp!=null?"　気温 "+m.temp+"℃":"")));
+    box.appendChild(el("div","mono",m.rawOb||""));}
+  if(n.taf)box.appendChild(el("div","mono",n.taf));
+  renderMap(ap);
+}
+function renderMap(ap){
+  if(!window.L){$("map").textContent="地図を読み込めませんでした。";return}
+  if(!MAP){
+    MAP=L.map("map",{zoomControl:true,attributionControl:true}).setView([ap.lat,ap.lon],9);
+    L.tileLayer("https://cyberjapandata.gsi.go.jp/xyz/pale/{z}/{x}/{y}.png",{maxZoom:14,attribution:'<a href="https://maps.gsi.go.jp/development/ichiran.html">地理院タイル</a>'}).addTo(MAP);
+    var dt=document.documentElement.getAttribute("data-theme");if(dt==="dark"||(dt!=="light"&&window.matchMedia&&matchMedia("(prefers-color-scheme: dark)").matches))$("map").classList.add("dark-tiles");
+    LAYER=L.layerGroup().addTo(MAP);
+  } else MAP.setView([ap.lat,ap.lon],MAP.getZoom());
+  LAYER.clearLayers();
+  var ac=(LIVE&&LIVE.aircraft)||[];
+  var col={watch:"var(--amber-solid)",type:"var(--amber-solid)",mil:"var(--verm)",op:"var(--teal)"};
+  ac.forEach(function(a){
+    if(a.g)return;
+    var c=col[a.s]||"var(--steel-soft)",big=!!a.s;
+    var sz=big?18:10;
+    var html='<svg width="'+sz+'" height="'+sz+'" viewBox="-6 -6 12 12" style="transform:rotate('+(a.tr||0)+'deg);overflow:visible"><path d="M0,-5.5 L4,4.5 L0,2.2 L-4,4.5 Z" fill="'+c+'" stroke="rgba(0,0,0,.35)" stroke-width=".6"/></svg>';
+    if(big)html+='<span class="plane-lbl" style="position:absolute;left:'+(sz+2)+'px;top:-2px">'+(a.r||a.c||"").replace(/[<>&"]/g,"")+"</span>";
+    var ic=L.divIcon({html:html,className:"",iconSize:[sz,sz],iconAnchor:[sz/2,sz/2]});
+    var mk=L.marker([a.la,a.lo],{icon:ic,zIndexOffset:big?1000:0}).addTo(LAYER);
+    var tip=[(a.c||"")+" "+(a.r||""),(a.t||"")+(a.al!=null?"　"+a.al+"ft":""),a.w||""].filter(Boolean).join("<br>").replace(/[<>&"](?!br>)/g,"");
+    mk.bindPopup(tip+(a.h?'<br><a href="https://globe.adsb.lol/?icao='+a.h+'" target="_blank" rel="noopener">地図で追う</a>':""));
+  });
+  $("live-note").textContent=LIVE?("位置は "+fmtGen(LIVE.generated)+" 時点（最大10分遅れ）"):"";
+  setTimeout(function(){MAP.invalidateSize()},50);
+}
+
+function renderRegistry(){
+  var r=PLAN.registry||{},act=r.active||[];
+  $("reg-sum").textContent="監視中 "+act.length+"機（一覧を開く）";
+  var meta=r.meta||{};
+  $("reg-note").textContent="毎朝自動で追加・抹消"+(meta.ok?"　最終確認 "+meta.ok.slice(5).replace("-","/"):"");
+  var list=$("reg-list");list.textContent="";
+  act.forEach(function(x){var d=el("div","reg-item");d.appendChild(el("b",null,x.reg));d.appendChild(el("span",null,(x.airline?x.airline.replace(/\s.*$/,"")+"・":"")+(x.name||"")));list.appendChild(d)});
+  var t=$("reg-log");t.textContent="";
+  (r.changelog||[]).slice(0,8).forEach(function(c){
+    var tr=el("tr");tr.appendChild(el("td",null,(c.date||"").slice(5).replace("-","/")));
+    var td=el("td");td.appendChild(el("span",c.action==="add"?"add":"rm",c.action==="add"?"追加 ":"抹消 "));
+    td.appendChild(document.createTextNode((c.reg||"")+" "+(c.name||"")+" — "+(c.reason||"")));tr.appendChild(td);t.appendChild(tr);
+  });
+  var pa=PLAN.planeAlert;
+  if(!pa){$("pa-note").textContent="";return}
+  $("pa-note").textContent=pa.off?"政府・要人機・軍用機のデータベース: 使用していません（config.json の plane_alert）":
+    "このほか、"+(pa.groups||[]).join("・")+" "+(pa.count||0).toLocaleString("ja-JP")+"機をデータベース（Plane-Alert-DB）で見張っています。"+
+    "空港の150nm圏に入ると判定し、国家元首機・政府機 "+(pa.global||0)+"機は世界中から探します"+(pa.date?"（"+pa.date.slice(5).replace("-","/")+" 更新）":"")+"。";
+  var rg=pa.regulars||[];
+  $("pa-reg").hidden=!rg.length;
+  $("pa-reg-sum").textContent="よく来るため外している機体 "+rg.length+"機";
+  var pl=$("pa-reg-list");pl.textContent="";
+  rg.forEach(function(x){var d=el("div","reg-item");d.appendChild(el("b",null,x.reg||x.hex));d.appendChild(el("span",null,x.name+"・直近"+x.days+"日"));pl.appendChild(d)});
+}
+
+function renderAll(){
+  if(!PLAN.airports[S.ap])S.ap=Object.keys(PLAN.airports)[0];
+  if(!PLAN.airports[S.ap].days[S.day])S.day=Object.keys(PLAN.airports[S.ap].days)[0];
+  $("upd").textContent=(window.RB_PREVIEW?"想定時刻 ":"更新 ")+fmtGen(PLAN.generated);
+  renderSegs();renderNotices();renderSummary();renderTimeline();renderEvents();renderNow();renderRegistry();
+  $("ver").textContent="v"+(PLAN.version||"")+(PLAN.status&&PLAN.status.runs?"・実行 "+PLAN.status.runs+"回目":"");
+}
+$("filter-clear").onclick=function(){S.hour=null;renderTimeline();renderEvents()};
+$("opt-op").onchange=function(){ls("rb.op",this.checked?"1":"0");renderEvents()};
+$("opt-trend").onchange=function(){ls("rb.trend",this.checked?"1":"0");renderEvents()};
+
+load().then(function(){pickDefaults();renderAll()}).catch(function(e){
+  $("upd").textContent="";$("sum").textContent="データを読み込めませんでした（"+e.message+"）。初回は自動実行が一度終わるまでお待ちください（最大10分）。";
+});
+if(!window.RB_PLAN){setInterval(function(){load().then(renderAll).catch(function(){})},3*60*1000)}
+})();
+</script>
+</body>
+</html>
