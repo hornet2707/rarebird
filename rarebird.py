@@ -331,8 +331,18 @@ class Net:
     def routeset(self, planes):
         out = []
         for i in range(0, len(planes), 100):
-            out.extend(self.post_json("https://api.adsb.lol/api/0/routeset", {"planes": planes[i:i + 100]}))
+            raw = self._req("https://api.adsb.lol/api/0/routeset", data={"planes": planes[i:i + 100]})
+            try:
+                out.extend(json.loads(raw))
+            except ValueError:
+                snippet = raw[:120].decode("utf-8", "replace").replace("\n", " ")
+                raise RuntimeError(f"JSONでない応答（{len(raw)}バイト）: {snippet!r}")
         return out
+
+    def vrs_routes(self, airline):
+        """VRS standing-data（adsb.lol の経路データの元）から航空会社ごとの便名→経路表"""
+        url = f"https://raw.githubusercontent.com/vradarserver/standing-data/main/routes/schema-01/{airline[0]}/{airline}-all.csv"
+        return self.get_text(url, timeout=30)
 
     # --- 羽田 公式時刻表（内部API。仕様変更で止まる可能性あり） ---
     def haneda(self, flight_type, arrival_type, ymd):
@@ -402,7 +412,12 @@ class FixtureNet(Net):
         want = set(hexes)
         return [a for a in self._f("hexes.json", {"ac": []}).get("ac", []) if (a.get("hex") or "").lower() in want]
 
+    def vrs_routes(self, airline):
+        return self._f(f"vrs_{airline}.csv", "")
+
     def routeset(self, planes):
+        if self._f("routeset_fail.json", {}).get("fail"):
+            raise RuntimeError("JSONでない応答（試験）")
         known = self._f("routes.json", {})
         out = []
         for p in planes:
@@ -1137,6 +1152,22 @@ def airport_latlon(icao, state):
     raise KeyError(f"空港 {icao} の座標が分かりません")
 
 
+def best_heading_target(a, aps, state, include_mil=True):
+    """機首の向きに最も合う空港（撮影拠点＋近隣の基地）。(空港, 距離nm, 角度差)"""
+    cands = [(ic,) + tuple(airport_latlon(ic, state)) for ic in aps]
+    if include_mil:
+        cands += [(code, la, lo) for code, (_, la, lo) in MIL_FIELDS.items()]
+    best = None
+    for code, la, lo in cands:
+        d = nm_between(la, lo, a["lat"], a["lon"])
+        diff = ang_diff(a["trk"], bearing(a["lat"], a["lon"], la, lo))
+        # 近い空港ほど角度のずれが大きくなりやすいので、距離で少し補正して比べる
+        score = diff - min(10.0, 150.0 / max(d, 5.0))
+        if best is None or score < best[3]:
+            best = (code, d, diff, score)
+    return best
+
+
 def process_live(net, cfg, state, watch, now_utc, tz, tt, pa=None):
     """広域走査（150nm）+ 監視機の全世界照会 + 希少機種の全世界照会
     → 在空機・到着予定/折り返し待ちの保持・発着記録・滑走路判定"""
@@ -1230,8 +1261,11 @@ def process_live(net, cfg, state, watch, now_utc, tz, tt, pa=None):
                 cs = r.get("callsign")
                 codes = [x.get("icao") for x in (r.get("_airports") or []) if x.get("icao")]
                 rc[cs] = {"d": today, "ap": codes, "ok": bool(r.get("plausible", True)) and bool(codes)}
+            state["routeset_fail"] = 0
         except Exception as e:  # noqa: BLE001
-            LOG.err("経路照会", e)
+            state["routeset_fail"] = state.get("routeset_fail", 0) + 1
+            LOG.err("経路照会（adsb.lol）", e)
+            vrs_fallback(net, ask, rc, today, {a["cs"]: a for a in seen.values()})
     for a in seen.values():
         route = rc.get(a["cs"], {})
         a["route"] = route.get("ap") if route.get("ok") else None
@@ -1260,19 +1294,13 @@ def process_live(net, cfg, state, watch, now_utc, tz, tt, pa=None):
                                 first=inb.get(key, {}).get("first", nowts))
             elif orig in aps:
                 outb[key] = dict(base, orig=orig, dest=dest, eta_dest=eta)
-        elif a["sev"] in ("type", "mil") and a["alt"] is not None and a["alt"] < 25000 and (a["vr"] or 0) < -300:
-            # 経路不明（軍用機など）: 広域圏内で降下しながら空港へ向かっている
-            for ic in aps:
-                lat0, lon0 = airport_latlon(ic, state)
-                d = nm_between(lat0, lon0, a["lat"], a["lon"])
-                if not (R < d <= W) or a["trk"] is None:
-                    continue
-                if ang_diff(a["trk"], bearing(a["lat"], a["lon"], lat0, lon0)) > 25:
-                    continue
-                if a["sev"] == "mil" and any(
-                        ang_diff(a["trk"], bearing(a["lat"], a["lon"], la, lo)) < ang_diff(a["trk"], bearing(a["lat"], a["lon"], lat0, lon0))
-                        for _, la, lo in MIL_FIELDS.values()):
-                    continue
+        elif a["sev"] in ("type", "mil") and a["alt"] is not None and a["alt"] < 25000 and (a["vr"] or 0) < -300 \
+                and a["trk"] is not None:
+            # 経路不明（軍用機など）: 広域圏内で降下しながら空港へ向かっている。
+            # 羽田と成田は約30nmしか離れていないため、最も向きの合う空港を1つだけ選ぶ
+            best = best_heading_target(a, aps, state, include_mil=(a["sev"] == "mil"))
+            if best and best[0] in aps and R < best[1] <= W and best[2] <= 25:
+                ic, d = best[0], best[1]
                 inb[key] = dict(base, dest=ic, orig=None, eta=nowts + d / max(a["gs"], 150) * 3600 + 300,
                                 dist=round(d), geo=True, first=inb.get(key, {}).get("first", nowts))
     for k in [k for k, v in inb.items() if nowts > v["eta"] + 1800]:
@@ -1292,8 +1320,49 @@ def process_live(net, cfg, state, watch, now_utc, tz, tt, pa=None):
             rw_state[ic] = {"code": code, "arr": arr, "dep": dep, "at": nowts}
         elif rw_state.get(ic) and nowts - rw_state[ic]["at"] > 2400:
             rw_state[ic]["stale"] = True
-        record_movements(ic, acs, arr, dep, a_lookup=None, mv=mv, state=state, now_utc=now_utc, tz=tz, ttx=ttx)
+        record_movements(ic, acs, arr, dep, a_lookup=None, mv=mv, state=state, now_utc=now_utc, tz=tz, ttx=ttx, aps=aps)
     return live, watched_air, area_by_ap
+
+
+def _route_plausible(codes, lat, lon):
+    """位置が出発地→到着地の経路から大きく外れていないか（座標の分かる空港だけで判定）"""
+    pts = []
+    for c in codes:
+        g = iata_geo(c)
+        if not g:
+            return True
+        pts.append((g[1], g[2]))
+    for (la1, lo1), (la2, lo2) in zip(pts, pts[1:]):
+        leg = nm_between(la1, lo1, la2, lo2)
+        if nm_between(la1, lo1, lat, lon) + nm_between(lat, lon, la2, lo2) <= leg * 1.25 + 150:
+            return True
+    return False
+
+
+def vrs_fallback(net, ask, rc, today, by_cs, max_airlines=15):
+    """adsb.lol の経路照会が使えないとき、同じ元データ（VRS standing-data, GitHub）を航空会社ごとに読む"""
+    import csv
+    import io
+    want = {}
+    for p in ask:
+        want.setdefault(p["callsign"][:3], []).append(p["callsign"])
+    n = 0
+    for airline, css in want.items():
+        if n >= max_airlines:
+            break
+        n += 1
+        try:
+            table = {}
+            for r in csv.DictReader(io.StringIO(net.vrs_routes(airline).lstrip("\ufeff"))):
+                table[(r.get("Callsign") or "").strip()] = (r.get("AirportCodes") or "").strip()
+        except Exception as e:  # noqa: BLE001
+            LOG.err(f"経路データ（予備） {airline}", e)
+            continue
+        for cs in css:
+            codes = [c for c in table.get(cs, "").split("-") if c]
+            a = by_cs.get(cs)
+            ok = bool(codes) and (a is None or _route_plausible(codes, a["lat"], a["lon"]))
+            rc[cs] = {"d": today, "ap": codes, "ok": ok, "src": "vrs"}
 
 
 def movement_direction(ic, a, ttx, date_iso):
@@ -1316,7 +1385,7 @@ def movement_direction(ic, a, ttx, date_iso):
     return None, fl, None, "不明"
 
 
-def record_movements(ic, acs, arr_votes, dep_votes, a_lookup, mv, state, now_utc, tz, ttx):
+def record_movements(ic, acs, arr_votes, dep_votes, a_lookup, mv, state, now_utc, tz, ttx, aps=None):
     lat0, lon0 = airport_latlon(ic, state)
     ends = airport_ends(ic)
     nowts = now_utc.timestamp()
@@ -1326,6 +1395,7 @@ def record_movements(ic, acs, arr_votes, dep_votes, a_lookup, mv, state, now_utc
         d = nm_between(lat0, lon0, a["lat"], a["lon"])
         local_date = dt.datetime.fromtimestamp(nowts, tz).date().isoformat()
         direction, fl, other, basis = movement_direction(ic, a, ttx, local_date)
+        diff = None
         if a["ground"]:
             if d > 3:
                 continue
@@ -1334,19 +1404,26 @@ def record_movements(ic, acs, arr_votes, dep_votes, a_lookup, mv, state, now_utc
                 direction = "ground"
         elif direction is None:
             # 幾何で推定（経路不明の軍用機・自家用機など）
-            if a["alt"] > 15000 or d > 40:
+            if a["alt"] > 15000 or d > 40 or a["trk"] is None:
+                continue
+            # 別の撮影拠点空港へ向かっていると分かっている機体は除く（例: 成田行きが羽田の近くを通る）
+            if any(k.startswith(a["hex"] + "|") and v.get("dest") != ic for k, v in state.get("inbound", {}).items()):
                 continue
             brg_to = bearing(a["lat"], a["lon"], lat0, lon0)
-            toward = a["trk"] is not None and ang_diff(a["trk"], brg_to) < 70
-            if a["vr"] is not None and a["vr"] < -400 and toward:
+            diff = ang_diff(a["trk"], brg_to)
+            if a["vr"] is not None and a["vr"] < -400 and diff < 30 and d <= 30:
                 direction = "arr"
-            elif a["vr"] is not None and a["vr"] > 400 and not toward and d < 25:
+            elif a["vr"] is not None and a["vr"] > 400 and diff > 110 and d < 25:
                 direction = "dep"
             elif a["alt"] < 3000 and d < 8:
-                direction = "arr" if toward else "dep"
+                direction = "arr" if diff < 70 else "dep"
             else:
                 continue
-            # 近隣の基地/他空港の方が近ければ採用しない
+            # 別の撮影拠点空港・近隣の基地の方が向きに合っていれば採用しない
+            if direction == "arr" and d > 8:
+                best = best_heading_target(a, aps or [ic], state, include_mil=True)
+                if best and best[0] != ic:
+                    continue
             if a["sev"] == "mil" and direction == "arr":
                 for code, (nm_, la, lo) in MIL_FIELDS.items():
                     if nm_between(la, lo, a["lat"], a["lon"]) < d * 0.7:
@@ -1382,7 +1459,8 @@ def record_movements(ic, acs, arr_votes, dep_votes, a_lookup, mv, state, now_utc
         if not rec:
             rec = {"ap": ic, "dir": direction, "hex": a["hex"], "reg": a["reg"], "type": a["type"],
                    "cs": a["cs"], "fl": fl, "other": other, "basis": basis, "sev": a["sev"], "why": a["why"],
-                   "first": nowts, "last": nowts, "evt": evt, "rwy": rwy, "date": local_date, "landed": a["ground"]}
+                   "first": nowts, "last": nowts, "evt": evt, "rwy": rwy, "date": local_date, "landed": a["ground"],
+                   "gdiff": None if basis != "位置" or diff is None else round(diff)}
             mv[key] = rec
         else:
             rec["last"] = nowts
@@ -1585,10 +1663,16 @@ def events_for(ic, day, cfg, state, watch, live, watched_air, tt, ttx, now_utc, 
                      ("出発済" if m["dir"] == "dep" else "駐機中")
             put({"key": f"{m['dir']}|{m.get('fl') or m['hex']}", "dir": m["dir"], "time": t.strftime("%H:%M"),
                  "fl": m.get("fl") or m.get("cs"), "reg": m.get("reg"), "hex": m["hex"], "type": m.get("type"),
-                 "name": m.get("why"), "cat": m["sev"], "conf": "確定", "status": status,
+                 "name": m.get("why"), "cat": m["sev"],
+                 "conf": "有力" if (m.get("basis") == "位置" and m["dir"] == "arr" and not m.get("rwy")
+                                   and not m.get("landed") and (m.get("gdiff") is None or m["gdiff"] >= 15)) else "確定",
+                 "status": status,
                  "other": ap_label(m.get("other")) if m.get("other") and not tt_row else (tt_row or {}).get("ap", ""),
                  "otherCode": m.get("other"), "sched": (tt_row or {}).get("time"), "rwyActual": m.get("rwy"),
-                 "reason": "ADS-Bで確認", "past": past or m["dir"] == "ground"})
+                 "reason": ("空港へまっすぐ降下中（経路情報なし）" if m.get("basis") == "位置" and not m.get("rwy")
+                            and (m.get("gdiff") or 99) < 15 else
+                            "位置と向きから推定（経路情報なし）" if m.get("basis") == "位置" and not m.get("rwy")
+                            else "ADS-Bで確認"), "past": past or m["dir"] == "ground"})
 
     # (B) 飛行中の注目機: この空港へ向かっている（確定）／この空港を出て折り返してくる（有力）
     nowts = now_utc.timestamp()
@@ -2058,7 +2142,8 @@ def main():
     status = {"generated": now_utc.isoformat(), "version": VERSION, "runs": state["runs"],
               "errors": LOG.errors, "notes": LOG.notes, "config_error": cfg_error, "calls": net.calls,
               "airports": cfg["airports"], "notify": bool(os.environ.get("NTFY_TOPIC")),
-              "globalRare": state.get("gtype_n"), "globalVip": state.get("gvip_n"), "inbound": len(state.get("inbound", {})),
+              "globalRare": state.get("gtype_n"), "globalVip": state.get("gvip_n"),
+              "routesetFail": state.get("routeset_fail", 0), "inbound": len(state.get("inbound", {})),
               "outbound": len(state.get("outbound", {}))}
     plan["status"] = status
     save_json(os.path.join(data_dir, "plan.json"), plan)
