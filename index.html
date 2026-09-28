@@ -68,6 +68,8 @@ button{font-family:inherit}
 .notice{margin-top:14px;padding:10px 12px;border-radius:6px;font-size:12.5px;border:1px solid var(--line);background:var(--panel)}
 .notice.warn{border-color:var(--verm-edge);background:var(--verm-bg)}
 .notice.info{border-color:var(--amber-edge);background:var(--amber-bg)}
+.notice.emg{border:2px solid var(--verm);background:var(--verm-bg);font-size:13px}
+.notice.emg b{color:var(--verm)}
 
 section{margin-top:26px}
 .eyebrow{font-family:var(--f-data);font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:var(--muted)}
@@ -104,7 +106,32 @@ h2{font-size:15px;margin:0;letter-spacing:.04em;text-wrap:balance}
 .ev[data-cat="type"]{border-left-color:var(--amber-edge)}
 .ev[data-cat="mil"]{border-left-color:var(--verm)}
 .ev[data-cat="op"]{border-left-color:var(--teal)}
+.ev[data-cat="emg"]{border-left-color:var(--verm);border-left-width:6px}
+.rep{border:1px solid var(--line);background:transparent;color:var(--muted);border-radius:4px;padding:1px 8px;font-size:11.5px;cursor:pointer;font-family:inherit}
+.rep.done{border-color:var(--verm-edge);color:var(--verm);cursor:default}
+.rep-box{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;align-items:center;font-size:12px;color:var(--muted)}
+.rep-box button{border:1px solid var(--verm-edge);background:var(--verm-bg);color:var(--ink);border-radius:4px;padding:3px 9px;font-size:12px;cursor:pointer;font-family:inherit}
+.desc-list{margin-top:10px;border-top:1px solid var(--line-soft);padding-top:8px;font-size:12.5px}
+.desc-list div{padding:3px 0}
+.desc-list b{font-family:var(--f-data)}
+.wx-leg{display:flex;gap:12px;flex-wrap:wrap;font-size:11px;color:var(--muted);padding:4px 4px 0}
 .ev[data-conf="傾向"]{border-left-style:dashed}
+.ev{cursor:pointer}
+.ev:focus-visible{outline:2px solid var(--steel);outline-offset:2px}
+.ev:not(.open){padding:7px 12px;align-items:center}
+.ev:not(.open) .ev-more{display:none}
+.ev:not(.open) .ev-time{font-size:15px}
+.ev:not(.open) .ev-time small,.ev:not(.open) .ev-dir{display:none}
+.ev:not(.open) .ev-name{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:12.5px;font-weight:500;color:var(--ink)}
+.ev:not(.open) .ev-line1 .actype{display:none}
+.ev .dirs{font-size:11px;font-weight:700;color:var(--muted);margin-left:2px}
+.ev.open .dirs{display:none}
+.chev{color:var(--muted);font-size:12px;width:14px;text-align:center;transition:transform .15s}
+.ev.open .chev{transform:rotate(180deg)}
+.st{font-size:11px;font-weight:700;border-radius:3px;padding:0 5px;border:1px solid var(--steel-soft);color:var(--steel);white-space:nowrap}
+.st.go{border-color:var(--verm-edge);color:var(--verm)}
+.ev-tools{display:flex;gap:6px}
+.ev-tools button{border:1px solid var(--line);background:var(--raised);color:var(--ink);border-radius:4px;padding:3px 9px;cursor:pointer;font-size:12px;font-family:inherit}
 .ev.past{opacity:.55}
 .ev-time{font-family:var(--f-data);font-weight:700;font-size:17px;line-height:1.2;font-variant-numeric:tabular-nums}
 .ev-time small{display:block;font-size:10.5px;font-weight:500;color:var(--muted);margin-top:2px}
@@ -186,13 +213,20 @@ details.past-box summary{cursor:pointer;font-size:12.5px;color:var(--muted);padd
         <span><i style="background:var(--cfg-s)"></i>南風</span>
         <span id="leg-s2"><i style="background:var(--cfg-s2)"></i>南風・都心経路</span>
       </div>
+      <div class="wx-leg" aria-label="撮影条件の凡例">
+        <span><b class="sh-good">◎</b> 撮影日和</span>
+        <span><b class="sh-fair">○</b> まずまず</span>
+        <span><b class="sh-poor">△</b> 雨・視界不良の恐れ</span>
+        <span>－ 予報なし　▲ 風向（矢印の向きへ吹く）</span>
+      </div>
     </div>
     <div class="filter" id="filter" hidden><span id="filter-txt"></span><button type="button" id="filter-clear">すべて表示</button></div>
   </section>
 
   <section>
     <div class="sec-head"><div><div class="eyebrow">Schedule</div><h2 id="ev-title">注目の発着</h2></div>
-      <span class="sec-note" id="ev-note"></span></div>
+      <span class="ev-tools"><button type="button" id="ev-open-all">すべて展開</button><button type="button" id="ev-close-all">すべて収納</button></span></div>
+    <p class="sec-note" id="ev-note" style="margin:-4px 0 8px">便をタップすると詳しい情報を開閉できます</p>
     <div class="evs" id="evs"></div>
     <details class="past-box" id="past-box" hidden><summary id="past-sum"></summary><div class="evs" id="evs-past" style="margin-top:8px"></div></details>
   </section>
@@ -223,6 +257,7 @@ details.past-box summary{cursor:pointer;font-size:12.5px;color:var(--muted);padd
     <div class="box">
       <label><input type="checkbox" id="opt-op"> 「珍しい運航者」（定期便の外国航空会社など）も表示する</label>
       <label><input type="checkbox" id="opt-trend" checked> 「傾向」（過去の実績からの推定）も表示する</label>
+      <p class="sec-note" id="rep-note" style="margin:.6em 0 0"></p>
       <p class="sec-note" style="margin:.6em 0 0">通知: スマホに「ntfy」アプリを入れ、GitHub の Secrets に設定したトピック名を購読すると、前夜21時に翌日の予報、朝6時に当日の予報が届きます。注目機は、相手国を出発して到着が確定した時点で1回、さらに約90分前にもう1回通知します（23〜5時に確定したものは朝に送ります）。</p>
     </div>
   </section>
@@ -230,8 +265,10 @@ details.past-box summary{cursor:pointer;font-size:12.5px;color:var(--muted);padd
   <footer class="foot">
     <p><b>確定</b> = ADS-Bで実際に飛行中（相手国を出発済み）・発着を確認　<b>有力</b> = 時刻表と過去の機材実績・曜日パターンから高い確度　<b>傾向</b> = 過去の実績からの推定（当日の割当ては変わりうる）</p>
     <p>特別塗装機がどの便に入るかは、航空会社が当日まで決めないことがあります。明日の特別塗装機は「来る確率と時間帯」までが限界で、当日の朝に飛び始めると「確定・有力」に切り替わります。</p>
-    <p>滑走路は予報風と公式の運用ルールからの予測です。直近2時間は、実際に進入中の機体の向きから判定した運用を使います。</p>
-    <p>データ: <a href="https://adsb.lol">adsb.lol</a>（ODbL）・<a href="https://github.com/sdr-enthusiasts/plane-alert-db">Plane-Alert-DB</a>（ODbL）・<a href="https://tokyo-haneda.com">羽田空港旅客ターミナル</a>・<a href="https://aviationweather.gov">aviationweather.gov</a>・<a href="https://open-meteo.com">Open-Meteo</a>・地図 <a href="https://maps.gsi.go.jp/development/ichiran.html">地理院タイル</a></p>
+    <p><b>滑走路の予測</b>: 直近2時間は、実際に最終進入・離陸している機体から判定した運用です。その先は「いまの運用」から出発し、風の予報で追い風が5ktを超える時間に切り替わるとみなします（管制は弱い追い風なら運用を変えないため）。風の予報は、いま＝METAR（実況）、約30時間先まで＝TAF（その空港の航空予報）、その先＝気象庁のメソモデル（MSM）の順に、より確かなものを使います。運用ルールは国交省の公表資料に基づきます。</p>
+    <p><b>撮影条件</b>（降水確率＝気象庁の天気予報、雲と雨量＝気象庁MSM、視程・雲底・一時的な雨＝TAF、いまの時間＝METAR の実況から判定。理由は各便の天気欄に表示）　<b class="sh-good">◎ 撮影日和</b> = 降水確率30%未満・低い雲が空の半分未満・視程8km以上　<b class="sh-fair">○ まずまず</b> = ◎と△の間（曇りがち、降水確率30〜59%など）　<b class="sh-poor">△ 雨・視界不良の恐れ</b> = 降水確率60%以上、1時間1mm以上の雨、視程3km未満のいずれか。低い雲だけを見るのは、機体を隠したり画面を暗くしたりするのが主に低い雲のためです。</p>
+    <p><b>緊急信号</b> = トランスポンダーの 7700（緊急事態）・7600（無線故障）・7500（ハイジャック）。撮影拠点から500nm以内の機体を表示し、300nm以内なら通知します。</p>
+    <p>データ: <a href="https://adsb.lol">adsb.lol</a>（ODbL）・<a href="https://github.com/sdr-enthusiasts/plane-alert-db">Plane-Alert-DB</a>（ODbL）・<a href="https://tokyo-haneda.com">羽田空港旅客ターミナル</a>・<a href="https://www.narita-airport.jp">成田国際空港</a>・<a href="https://aviationweather.gov">aviationweather.gov</a>・<a href="https://open-meteo.com">Open-Meteo</a>・地図 <a href="https://maps.gsi.go.jp/development/ichiran.html">地理院タイル</a></p>
     <p id="ver"></p>
   </footer>
 </main>
@@ -244,10 +281,11 @@ var $=function(id){return document.getElementById(id)};
 function el(tag,cls,txt){var n=document.createElement(tag);if(cls)n.className=cls;if(txt!=null)n.textContent=txt;return n}
 function ls(k,v){try{if(v===undefined)return localStorage.getItem(k);localStorage.setItem(k,v)}catch(e){return null}}
 
-var PLAN=null,LIVE=null,S={ap:null,day:null,hour:null};
+var PLAN=null,LIVE=null,S={ap:null,day:null,hour:null,open:{},openAll:false};
 var WD="日月火水木金土";
 var CONF_CLS={"確定":"c1","有力":"c2","傾向":"c3"};
-var CAT_LABEL={watch:"特別塗装機",type:"希少機種",mil:"軍用・政府",op:"珍しい運航者"};
+var CAT_LABEL={watch:"特別塗装機",type:"希少機種",mil:"軍用・政府",op:"珍しい運航者",emg:"緊急信号"};
+var REP_REASONS=["来なかった","空港が違う","時刻が大きく違う","機体・種類が違う","その他"];
 var SHOOT={good:["◎","sh-good","撮影日和"],fair:["○","sh-fair","まずまず"],poor:["△","sh-poor","雨・視界不良の恐れ"],"?":["－","","予報なし"]};
 
 function fetchJSON(u){return fetch(u+(u.indexOf("?")<0?"?":"&")+"t="+Date.now(),{cache:"no-store"}).then(function(r){if(!r.ok)throw new Error(r.status);return r.json()})}
@@ -270,6 +308,7 @@ function pickDefaults(){
   S.day=(h>=18&&days[1])?days[1]:days[0];
   $("opt-op").checked=ls("rb.op")==="1";
   $("opt-trend").checked=ls("rb.trend")!=="0";
+  S.openAll=ls("rb.expand")==="1";
 }
 
 function renderSegs(){
@@ -289,11 +328,20 @@ function renderSegs(){
 function renderNotices(){
   var box=$("notices");box.textContent="";
   var st=PLAN.status||{};
-  if(window.RB_PREVIEW){var n=el("div","notice info");n.innerHTML="<b>表示例です（いまの実況ではありません）。</b>「<b>"+fmtGen(PLAN.generated)+"</b>」の時点を想定した試験用の場面で、画面上の「今日」「いま」「飛行中」はすべてこの想定時刻が基準です。羽田の時刻表と気象の一部は実データですが、特別塗装機の飛行状況・滑走路の運用状況・過去の履歴は<b>架空</b>です。本物は GitHub に設置すると10分おきに実際の状況で更新されます。";box.appendChild(n)}
+  if(window.RB_PREVIEW){var n=el("div","notice info");n.innerHTML="<b>表示例です（いまの実況ではありません）。</b>「<b>"+fmtGen(PLAN.generated)+"</b>」の時点を想定した試験用の場面で、画面上の「今日」「いま」「飛行中」はすべてこの想定時刻が基準です。羽田の時刻表と気象の一部は実データですが、特別塗装機の飛行状況・滑走路の運用状況・過去の履歴は<b>架空</b>です。本物は GitHub に設置すると5分おきに実際の状況で更新されます。";box.appendChild(n)}
   if(st.config_error){box.appendChild(el("div","notice warn","設定ファイルの問題: "+st.config_error))}
   if(st.errors&&st.errors.length){box.appendChild(el("div","notice warn","一部のデータを取得できませんでした（"+st.errors.length+"件）。表示は取得できた分と前回の結果です。"))}
   var gen=new Date(PLAN.generated).getTime();
   if(!window.RB_PREVIEW&&Date.now()-gen>40*60*1000){box.appendChild(el("div","notice warn","最終更新から40分以上経っています。自動更新が止まっている可能性があります。"))}
+  (PLAN.emergencies||[]).forEach(function(x){
+    var ks=Object.keys(x.dist||{}),near=ks.sort(function(a,b){return x.dist[a]-x.dist[b]})[0];
+    var nm=(PLAN.airports[near]||{}).name||near;
+    var to=x.routeTxt||((x.route&&x.route.length>=2)?x.route[0]+"→"+x.route[x.route.length-1]:"行き先不明");
+    var n=el("div","notice emg");n.appendChild(el("b",null,"緊急信号 "+x.label));
+    n.appendChild(document.createTextNode("　"+[x.reg,x.type,x.fl||x.cs,to].filter(Boolean).join(" ")+"　"+nm+"から"+x.dist[near]+"nm・高度"+(x.alt!=null?x.alt+"ft":"?")+"　"));
+    var a=el("a",null,"地図で追う");a.href="https://globe.adsb.lol/?icao="+encodeURIComponent(x.hex);a.target="_blank";a.rel="noopener";n.appendChild(a);
+    box.appendChild(n);
+  });
   var L=PLAN.learning||{};
   if(!window.RB_PREVIEW&&(L.days||0)<7){box.appendChild(el("div","notice info","学習中（観測 "+(L.days||0)+"日分）。「明日」の予測は観測が1〜2週間たまるほど充実します。"))}
 }
@@ -361,8 +409,11 @@ function renderTimeline(){
   $("leg-s2").hidden=!used;
 }
 
+function cardKey(e,ap){return ap.icao+"|"+S.day+"|"+e.key}
+function isOpen(e,ap){var k=cardKey(e,ap);return (k in S.open)?S.open[k]:S.openAll}
 function evCard(e,ap){
-  var c=el("article","ev"+(e.past?" past":""));c.setAttribute("data-cat",e.cat);c.setAttribute("data-conf",e.conf);
+  var c=el("article","ev"+(e.past?" past":"")+(isOpen(e,ap)?" open":""));c.setAttribute("data-cat",e.cat);c.setAttribute("data-conf",e.conf);
+  c.tabIndex=0;c.setAttribute("aria-expanded",String(isOpen(e,ap)));
   var t=el("div","ev-time");
   if(e.time){t.textContent=(e.approx?"~":"")+e.time;if(e.sched&&e.sched!==e.time)t.appendChild(el("small",null,"定刻 "+e.sched))}
   else{t.textContent="随時";t.appendChild(el("small",null,"傾向"))}
@@ -371,34 +422,64 @@ function evCard(e,ap){
   var m=el("div","ev-main");
   var l1=el("div","ev-line1");
   l1.appendChild(el("span","reg",e.reg||e.fl||"－"));
+  l1.appendChild(el("span","dirs",dirTxt));
   if(e.type&&e.type!=="----")l1.appendChild(el("span","actype",e.type));
+  if(e.status==="飛行中"||e.status==="出発準備中"||e.status==="着陸見込み")l1.appendChild(el("span","st"+(e.status==="出発準備中"?" go":""),e.status));
   l1.appendChild(el("span","pill "+CONF_CLS[e.conf],e.conf));
+  l1.appendChild(el("span","chev","▾"));
   m.appendChild(l1);
   var nm=e.name||CAT_LABEL[e.cat]||"";
   if(nm)m.appendChild(el("div","ev-name",nm));
+  var more=el("div","ev-more");
   var route=[];
   if(e.fl&&e.reg)route.push(e.fl);
   if(e.other)route.push((e.dir==="arr"?"← ":e.dir==="dep"?"→ ":"")+e.other);
   if(e.status)route.push(e.status);
-  if(route.length)m.appendChild(el("div","ev-route",route.join("　")));
+  if(route.length)more.appendChild(el("div","ev-route",route.join("　")));
   if(e.hoursDetail&&e.hoursDetail.length){
     var hr=el("div","hrs");
     if(e.ratio!=null)hr.appendChild(el("span","chip","来る確率 "+Math.round(e.ratio*100)+"%"));
     e.hoursDetail.forEach(function(x){hr.appendChild(el("span","chip",x.h+"時台 "+(x.dir==="arr"?"着":x.dir==="dep"?"発":"発着")))});
-    m.appendChild(hr);
+    more.appendChild(hr);
   }
-  if(e.reason)m.appendChild(el("div","ev-why",e.reason));
+  if(e.reason)more.appendChild(el("div","ev-why",e.reason));
   var meta=el("div","ev-meta");
   var rw=el("span");rw.appendChild(document.createTextNode("滑走路 "));rw.appendChild(el("span","rw",e.rwy||"－"));
   if(e.rwyConf)rw.appendChild(document.createTextNode("（"+e.rwyConf+"）"));meta.appendChild(rw);
-  var sh=SHOOT[e.shoot||"?"];if(e.shoot&&e.shoot!=="?"){var s=el("span",sh[1],"天気 "+sh[0]+" "+sh[2]);meta.appendChild(s)}
+  var sh=SHOOT[e.shoot||"?"];if(e.shoot&&e.shoot!=="?"){var s=el("span",sh[1],"天気 "+sh[0]+" "+sh[2]+(e.shootWhy?"（"+e.shootWhy+"）":""));meta.appendChild(s)}
   var lk=el("span","links");
   if(e.hex){var a=el("a",null,"地図で追う");a.href="https://globe.adsb.lol/?icao="+encodeURIComponent(e.hex);a.target="_blank";a.rel="noopener";lk.appendChild(a)}
   if(e.reg&&/^[A-Z0-9-]{4,8}$/.test(e.reg)){var b=el("a",null,"機体を調べる");b.href="https://www.flightradar24.com/data/aircraft/"+encodeURIComponent(e.reg.toLowerCase());b.target="_blank";b.rel="noopener";lk.appendChild(b)}
   if(lk.childNodes.length)meta.appendChild(lk);
-  m.appendChild(meta);
+  var rk="rb.rep."+ap.icao+"."+S.day+"."+e.key,done=ls(rk);
+  var rb=el("button","rep"+(done?" done":""),done?"報告済み（"+done+"）":"✓ 違う");rb.type="button";
+  rb.title="この予報が間違っていたら押してください。Claude があとで原因を調べます";
+  meta.appendChild(rb);
+  more.appendChild(meta);
+  var box=el("div","rep-box");box.hidden=true;
+  box.appendChild(el("span",null,"どう違った？"));
+  REP_REASONS.forEach(function(r){var b=el("button",null,r);b.type="button";b.onclick=function(){sendReport(e,ap,r,rb,box,rk)};box.appendChild(b)});
+  more.appendChild(box);
+  rb.onclick=function(){if(!ls(rk))box.hidden=!box.hidden};
+  m.appendChild(more);
   c.appendChild(m);
+  function toggle(){var o=!c.classList.contains("open");c.classList.toggle("open",o);c.setAttribute("aria-expanded",String(o));S.open[cardKey(e,ap)]=o}
+  c.addEventListener("click",function(ev){if(ev.target.closest("a,button"))return;toggle()});
+  c.addEventListener("keydown",function(ev){if((ev.key==="Enter"||ev.key===" ")&&ev.target===c){ev.preventDefault();toggle()}});
   return c;
+}
+
+function sendReport(e,ap,reason,rb,box,rk){
+  var R=PLAN.report;
+  if(window.RB_PREVIEW||!R||!R.topic){box.textContent="表示例では送信しません（公開版では報告が保存されます）";return}
+  var ev={key:e.key,ap:ap.icao,day:S.day,time:e.time,sched:e.sched,dir:e.dir,fl:e.fl,reg:e.reg,hex:e.hex,type:e.type,
+    name:e.name,cat:e.cat,conf:e.conf,status:e.status,other:e.other,why:e.reason,rwy:e.rwy,rwyConf:e.rwyConf};
+  var body=JSON.stringify({src:"画面",reason:reason,ev:ev,seen:new Date().toISOString(),gen:PLAN.generated,version:PLAN.version});
+  box.textContent="送信中…";
+  fetch(R.server.replace(/\/$/,"")+"/"+encodeURIComponent(R.topic),{method:"POST",body:body})
+    .then(function(r){if(!r.ok)throw new Error(r.status);ls(rk,reason);rb.textContent="報告済み（"+reason+"）";rb.className="rep done";
+      box.textContent="受け付けました。次の更新（5〜10分以内）で記録され、Claude があとで確認します。"})
+    .catch(function(){box.textContent="送信できませんでした。電波の良いところでもう一度押してください。";rb.onclick=function(){}});
 }
 
 function renderEvents(){
@@ -414,7 +495,7 @@ function renderEvents(){
   var pb=$("past-box"),pbox=$("evs-past");pbox.textContent="";
   pb.hidden=!past.length;$("past-sum").textContent="済んだ便 "+past.length+"件";
   past.forEach(function(e){pbox.appendChild(evCard(e,ap))});
-  $("ev-note").textContent=ap.timetable?"羽田は公式時刻表と照合":"成田は観測実績と経路情報から推定";
+  $("ev-note").textContent="便をタップすると詳細を開閉。"+(ap.timetable?ap.name+"は公式の時刻表と照合（貨物便は経路情報から）":ap.name+"は観測実績と経路情報から推定");
 }
 
 var MAP=null,LAYER=null;
@@ -434,6 +515,14 @@ function renderNow(){
     box.appendChild(el("div",null,"風 "+w+(m.wgst?"（最大"+m.wgst+"kt）":"")+(m.temp!=null?"　気温 "+m.temp+"℃":"")));
     box.appendChild(el("div","mono",m.rawOb||""));}
   if(n.taf)box.appendChild(el("div","mono",n.taf));
+  var ds=PLAN.descending||[];
+  if(ds.length){
+    var dl=el("div","desc-list");dl.appendChild(el("div",null,"行き先不明で降下中の注目機（着陸空港は最終進入に入ると判明。通知はしません）"));
+    ds.forEach(function(x){var r=el("div");r.appendChild(el("b",null,x.reg||x.cs||x.hex));
+      var dd=Object.keys(x.dist).map(function(k){return ((PLAN.airports[k]||{}).name||k)+x.dist[k]+"nm"}).join("・");
+      r.appendChild(document.createTextNode(" "+(x.type||"")+" "+(x.why||"")+"　"+dd+"・高度"+x.alt+"ft"));dl.appendChild(r)});
+    box.appendChild(dl);
+  }
   renderMap(ap);
 }
 function renderMap(ap){
@@ -446,7 +535,7 @@ function renderMap(ap){
   } else MAP.setView([ap.lat,ap.lon],MAP.getZoom());
   LAYER.clearLayers();
   var ac=(LIVE&&LIVE.aircraft)||[];
-  var col={watch:"var(--amber-solid)",type:"var(--amber-solid)",mil:"var(--verm)",op:"var(--teal)"};
+  var col={watch:"var(--amber-solid)",type:"var(--amber-solid)",mil:"var(--verm)",op:"var(--teal)",emg:"var(--verm)"};
   ac.forEach(function(a){
     if(a.g)return;
     var c=col[a.s]||"var(--steel-soft)",big=!!a.s;
@@ -458,7 +547,7 @@ function renderMap(ap){
     var tip=[(a.c||"")+" "+(a.r||""),(a.t||"")+(a.al!=null?"　"+a.al+"ft":""),a.w||""].filter(Boolean).join("<br>").replace(/[<>&"](?!br>)/g,"");
     mk.bindPopup(tip+(a.h?'<br><a href="https://globe.adsb.lol/?icao='+a.h+'" target="_blank" rel="noopener">地図で追う</a>':""));
   });
-  $("live-note").textContent=LIVE?("位置は "+fmtGen(LIVE.generated)+" 時点（最大10分遅れ）"):"";
+  $("live-note").textContent=LIVE?("位置は "+fmtGen(LIVE.generated)+" 時点（5〜10分ほど遅れます）"):"";
   setTimeout(function(){MAP.invalidateSize()},50);
 }
 
@@ -492,14 +581,18 @@ function renderAll(){
   if(!PLAN.airports[S.ap].days[S.day])S.day=Object.keys(PLAN.airports[S.ap].days)[0];
   $("upd").textContent=(window.RB_PREVIEW?"想定時刻 ":"更新 ")+fmtGen(PLAN.generated);
   renderSegs();renderNotices();renderSummary();renderTimeline();renderEvents();renderNow();renderRegistry();
+  var rp=PLAN.reports||{};
+  $("rep-note").textContent="誤り報告: 予報が間違っていたら各便の「✓ 違う」を押してください（通知の「間違いを報告」ボタンも同じ）。これまで "+(rp.count||0)+"件"+(rp.open?"（Claude の確認待ち "+rp.open+"件）":"")+"。";
   $("ver").textContent="v"+(PLAN.version||"")+(PLAN.status&&PLAN.status.runs?"・実行 "+PLAN.status.runs+"回目":"");
 }
 $("filter-clear").onclick=function(){S.hour=null;renderTimeline();renderEvents()};
+$("ev-open-all").onclick=function(){S.openAll=true;S.open={};ls("rb.expand","1");renderEvents()};
+$("ev-close-all").onclick=function(){S.openAll=false;S.open={};ls("rb.expand","0");renderEvents()};
 $("opt-op").onchange=function(){ls("rb.op",this.checked?"1":"0");renderEvents()};
 $("opt-trend").onchange=function(){ls("rb.trend",this.checked?"1":"0");renderEvents()};
 
 load().then(function(){pickDefaults();renderAll()}).catch(function(e){
-  $("upd").textContent="";$("sum").textContent="データを読み込めませんでした（"+e.message+"）。初回は自動実行が一度終わるまでお待ちください（最大10分）。";
+  $("upd").textContent="";$("sum").textContent="データを読み込めませんでした（"+e.message+"）。初回は自動実行が一度終わるまでお待ちください（5〜10分）。";
 });
 if(!window.RB_PLAN){setInterval(function(){load().then(renderAll).catch(function(){})},3*60*1000)}
 })();

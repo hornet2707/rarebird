@@ -4,7 +4,7 @@
 レアバード・スコープ — 撮影計画エンジン
 =====================================
 
-GitHub Actions から10分おきに実行され、撮影拠点空港（既定: 羽田・成田）に
+GitHub Actions から5分おきに実行され、撮影拠点空港（既定: 羽田・成田）に
 「今日・明日、何時に、どの滑走路で、撮る価値のある機体が発着するか」を計算し、
 静的ページ（GitHub Pages）用のJSONと通知を出す。
 
@@ -36,7 +36,7 @@ import urllib.error
 import urllib.request
 from zoneinfo import ZoneInfo
 
-VERSION = "2.0.0"
+VERSION = "2.2.0"
 
 # --------------------------------------------------------------------------
 # 既定設定（config.json で上書きできる）
@@ -127,8 +127,12 @@ RUNWAYS = {
 }
 AIRPORT_INFO = {
     "RJTT": {"name": "羽田", "iata": "HND", "lat": 35.5533, "lon": 139.7811, "timetable": "haneda"},
-    "RJAA": {"name": "成田", "iata": "NRT", "lat": 35.7647, "lon": 140.3864, "timetable": None},
+    "RJAA": {"name": "成田", "iata": "NRT", "lat": 35.7647, "lon": 140.3864, "timetable": "narita"},
 }
+# 気象庁の府県天気予報の区域（羽田=東京都 東京地方、成田=千葉県 北西部）
+JMA_AREA = {"RJTT": ("130000", "130010"), "RJAA": ("120000", "120010")}
+# 運用を切り替える追い風の目安（kt）。これ以下なら今の運用が続くとみなす
+TAILWIND_SWITCH_KT = 5.0
 # 軍用機の行き先候補（民間機の判定には使わない）
 MIL_FIELDS = {
     "RJTY": ("横田", 35.7485, 139.3486), "RJTA": ("厚木", 35.4546, 139.4500),
@@ -321,6 +325,14 @@ class Net:
             out.extend(self.adsb("/type/" + ",".join(types[i:i + 12])))
         return out
 
+    def squawk(self, code):
+        """そのスコークを出している機体を世界中から"""
+        return self.adsb(f"/sqk/{code}")
+
+    def reports(self, server, topic, since):
+        """画面・通知から送られた誤り報告（ntfy に12時間保管される）を受け取る"""
+        return self.get_text(f"{server.rstrip('/')}/{topic}/json?poll=1&since={since}", timeout=20)
+
     def hexes(self, hexes):
         """機体番号（24bit）で世界中から。カンマ区切りで90機ずつ"""
         out = []
@@ -354,6 +366,23 @@ class Net:
         d = self.post_json("https://tokyo-haneda.com/app/api/v2/flight/search", body, headers=hdr, timeout=40)
         return d.get("flightlists") or []
 
+    # --- 成田 公式フライト情報（内部API。旅客便のみ・仕様変更で止まる可能性あり） ---
+    def narita(self, dom_inter, dep_arr, date_iso):
+        hdr = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) "
+                             "Chrome/128.0 Safari/537.36",
+               "Accept": "application/json, text/plain, */*", "Accept-Language": "ja",
+               "Referer": f"https://www.narita-airport.jp/ja/flight/{'arr' if dep_arr == 'A' else 'dep'}-search/"}
+        out = []
+        for page in range(6):
+            url = (f"https://www.narita-airport.jp/api/bff/searchFlight/?locale=ja&domInter={dom_inter}"
+                   f"&flightDepArr={dep_arr}&date={date_iso}&page={page}&time=00%3A00&size=500")
+            d = self.get_json(url, headers=hdr, timeout=40)
+            f = d.get("flights") or {}
+            out.extend(f.get("data") or [])
+            if not f.get("hasNextPage"):
+                break
+        return out
+
     # --- 気象 ---
     def metar(self, ids):
         return self.get_json(f"https://aviationweather.gov/api/data/metar?ids={','.join(ids)}&format=json&hours=3")
@@ -368,14 +397,27 @@ class Net:
                "&daily=sunrise,sunset&wind_speed_unit=kn&timezone=Asia%%2FTokyo&forecast_days=3") % (lat, lon)
         return self.get_json(url)
 
+    def openmeteo_jma(self, lat, lon):
+        """気象庁のメソモデル（MSM 5km・3時間ごと更新）→全球モデルへつなぐ時間別予報"""
+        url = ("https://api.open-meteo.com/v1/jma?latitude=%.4f&longitude=%.4f"
+               "&hourly=cloud_cover,cloud_cover_low,precipitation,wind_speed_10m,wind_direction_10m,weather_code"
+               "&models=jma_seamless&wind_speed_unit=kn&timezone=Asia%%2FTokyo&forecast_days=3") % (lat, lon)
+        return self.get_json(url)
+
+    def jma_forecast(self, office):
+        """気象庁の府県天気予報（6時間ごとの降水確率など。予報官が発表する公式の予報）"""
+        return self.get_json(f"https://www.jma.go.jp/bosai/forecast/data/forecast/{office}.json")
+
     def page(self, url):
         return self.get_text(url, headers={"Accept": "text/html"}, timeout=40)
 
-    def notify(self, server, topic, title, message, click=None, priority=3, tags=None):
+    def notify(self, server, topic, title, message, click=None, priority=3, tags=None, actions=None):
         body = {"topic": topic, "title": title, "message": message, "priority": priority,
                 "tags": tags or ["airplane"]}
         if click:
             body["click"] = click
+        if actions:
+            body["actions"] = actions
         return self._req(server.rstrip("/") + "/", data=body, timeout=20)
 
 
@@ -408,6 +450,12 @@ class FixtureNet(Net):
         want = set(types)
         return [a for a in self._f("types.json", {"ac": []}).get("ac", []) if (a.get("t") or "").upper() in want]
 
+    def squawk(self, code):
+        return [a for a in self._f("squawk.json", {"ac": []}).get("ac", []) if str(a.get("squawk")) == code]
+
+    def reports(self, server, topic, since):
+        return self._f("reports.ndjson", "") if not self._f("reports_done.json", {}).get(since) else ""
+
     def hexes(self, hexes):
         want = set(hexes)
         return [a for a in self._f("hexes.json", {"ac": []}).get("ac", []) if (a.get("hex") or "").lower() in want]
@@ -433,6 +481,9 @@ class FixtureNet(Net):
     def haneda(self, flight_type, arrival_type, ymd):
         return self._f(f"haneda_{ymd}_{flight_type}{arrival_type}.json", [])
 
+    def narita(self, dom_inter, dep_arr, date_iso):
+        return self._f(f"narita_{date_iso}_{dom_inter}{dep_arr}.json", [])
+
     def metar(self, ids):
         return self._f("metar.json", [])
 
@@ -442,6 +493,12 @@ class FixtureNet(Net):
     def openmeteo(self, lat, lon):
         return self._f("openmeteo.json", {})
 
+    def openmeteo_jma(self, lat, lon):
+        return self._f("openmeteo_jma.json", {})
+
+    def jma_forecast(self, office):
+        return self._f(f"jma_{office}.json", [])
+
     def page(self, url):
         return self._f("livery.html", "")
 
@@ -450,9 +507,9 @@ class FixtureNet(Net):
             return self._f("planealert.csv", "")
         return self._f("runways.csv", "")
 
-    def notify(self, server, topic, title, message, click=None, priority=3, tags=None):
-        self.sent.append({"title": title, "message": message, "priority": priority})
-        print("NOTIFY", title, "|", message)
+    def notify(self, server, topic, title, message, click=None, priority=3, tags=None, actions=None):
+        self.sent.append({"title": title, "message": message, "priority": priority, "actions": actions})
+        print("NOTIFY", title, "|", message, "| ボタン:" + ",".join(a["label"] for a in actions or []))
 
 
 # --------------------------------------------------------------------------
@@ -603,7 +660,8 @@ def parse_weather(net, cfg, state, now_utc, tz):
                 prev = wx.setdefault(ic, {}).get("metar")
                 if not prev or (m.get("obsTime") or 0) >= (prev.get("obsTime") or 0):
                     wx[ic]["metar"] = {k: m.get(k) for k in ("obsTime", "reportTime", "wdir", "wspd", "wgst",
-                                                             "visib", "rawOb", "cover", "temp", "fltCat")}
+                                                             "visib", "rawOb", "cover", "temp", "fltCat",
+                                                             "wxString", "clouds")}
     except Exception as e:  # noqa: BLE001
         LOG.err("METAR", e)
     try:
@@ -628,63 +686,230 @@ def parse_weather(net, cfg, state, now_utc, tz):
                 w["om_at"] = now_utc.timestamp()
         except Exception as e:  # noqa: BLE001
             LOG.err(f"Open-Meteo {ic}", e)
+        try:
+            mj = net.openmeteo_jma(info[0], info[1])
+            if mj.get("hourly"):
+                w["msm"] = {"hourly": mj["hourly"]}
+        except Exception as e:  # noqa: BLE001
+            LOG.err(f"気象庁モデル（Open-Meteo） {ic}", e)
+        if ic in JMA_AREA:
+            try:
+                w["jma"] = jma_pops(net.jma_forecast(JMA_AREA[ic][0]), JMA_AREA[ic][1])
+            except Exception as e:  # noqa: BLE001
+                LOG.err(f"気象庁の天気予報 {ic}", e)
     return wx
 
 
-def taf_wind_at(taf, ts):
-    """TAF（デコード済）から時刻tsの卓越風を返す。TEMPO/PROBは風には使わない"""
-    if not taf or not taf.get("fcsts"):
+def jma_pops(doc, area):
+    """気象庁の府県天気予報 → [[開始時刻(ISO), 降水確率%], ...]（6時間ごと）と天気の文章"""
+    out = {"pops": [], "weathers": []}
+    for block in (doc or [])[:1]:
+        for ts in block.get("timeSeries") or []:
+            times = ts.get("timeDefines") or []
+            for a in ts.get("areas") or []:
+                if (a.get("area") or {}).get("code") != area:
+                    continue
+                if a.get("pops"):
+                    out["pops"] = [[t, int(p)] for t, p in zip(times, a["pops"]) if str(p).strip().isdigit()]
+                if a.get("weathers"):
+                    out["weathers"] = [[t, w] for t, w in zip(times, a["weathers"])]
+        out["report"] = block.get("reportDatetime")
+    return out
+
+
+def jma_pop_at(jma, ts):
+    """その時刻を含む6時間ブロックの降水確率（気象庁）"""
+    best = None
+    for t, p in (jma or {}).get("pops", []):
+        try:
+            t0 = dt.datetime.fromisoformat(t).timestamp()
+        except ValueError:
+            continue
+        if t0 <= ts < t0 + 6 * 3600:
+            best = p
+    return best
+
+
+def _vis_m(v):
+    """aviationweather の視程（SM、'6+' など）→ m"""
+    if v is None:
         return None
-    cur = None
+    s = str(v).strip()
+    if s.endswith("+"):
+        return 10000
+    try:
+        return min(10000, round(float(s) * 1609))
+    except ValueError:
+        return None
+
+
+def _ceiling(clouds):
+    """BKN/OVC の最も低い雲底（ft）"""
+    bases = [c.get("base") for c in (clouds or []) if c.get("cover") in ("BKN", "OVC", "OVX") and c.get("base") is not None]
+    return min(bases) if bases else None
+
+
+PRECIP_RE = re.compile(r"(RA|SN|DZ|GR|GS|PL|SG|TS|SH|UP)")
+WX_JA = [("TSRA", "雷雨"), ("SHRA", "にわか雨"), ("SHSN", "にわか雪"), ("FZRA", "着氷性の雨"), ("TS", "雷"),
+         ("RA", "雨"), ("DZ", "霧雨"), ("SN", "雪"), ("GR", "ひょう"), ("FG", "霧"), ("BR", "もや"), ("HZ", "煙霧"),
+         ("VCSH", "付近でにわか雨"), ("SQ", "スコール")]
+
+
+def wx_ja(s):
+    """'-SHRA BR' → '弱いにわか雨・もや'"""
+    out = []
+    for tok in (s or "").split():
+        pre = "弱い" if tok.startswith("-") else "強い" if tok.startswith("+") else ""
+        core = tok.lstrip("+-")
+        name = next((ja for code, ja in WX_JA if core == code), None)
+        if name is None:
+            name = "".join(ja for code, ja in WX_JA if code in core and len(code) == 2 and code not in ("SH", "TS"))[:8] or core
+        out.append(pre + name)
+    return "・".join(out)
+
+
+def taf_state_at(taf, ts):
+    """TAF（デコード済）の時刻tsにおける卓越状態（BECMG は引き継ぎ）と一時的な変化（TEMPO/PROB）"""
+    base = {"wdir": None, "wspd": None, "wx": None, "vis": None, "ceil": None}
+    tempo = []
+    if not taf or not taf.get("fcsts"):
+        return None, tempo
+    found = False
     for f in taf["fcsts"]:
         ch = f.get("fcstChange")
+        t0, t1 = f.get("timeFrom") or 0, f.get("timeTo") or 0
         if ch in ("TEMPO", "PROB") or (f.get("probability") not in (None, 0)):
+            if t0 <= ts < t1:
+                tempo.append({"wx": f.get("wxString"), "vis": _vis_m(f.get("visib")), "ceil": _ceiling(f.get("clouds")),
+                              "kind": "一時" if ch == "TEMPO" else "所により"})
             continue
-        if (f.get("timeFrom") or 0) <= ts < (f.get("timeTo") or 0):
-            cur = f
-    if not cur:
-        return None
-    wd, ws = cur.get("wdir"), cur.get("wspd")
-    if isinstance(wd, str):
-        wd = None  # VRB
-    return (num(wd), num(ws))
+        start = f.get("timeBec") or t0 if ch == "BECMG" else t0
+        if ch == "FM" or ch is None:
+            if t0 > ts:
+                continue
+            found = True
+            if ch == "FM":
+                base = {"wdir": None, "wspd": None, "wx": None, "vis": None, "ceil": None}
+        elif ch == "BECMG":
+            if ts < start:
+                continue
+            found = True
+        wd = f.get("wdir")
+        if f.get("wspd") is not None:
+            base["wdir"] = None if isinstance(wd, str) else num(wd)
+            base["wspd"] = num(f.get("wspd"))
+        if f.get("wxString") is not None:
+            base["wx"] = f.get("wxString")
+        if f.get("visib") is not None:
+            base["vis"] = _vis_m(f.get("visib"))
+        if f.get("clouds"):
+            base["ceil"] = _ceiling(f.get("clouds"))
+    if not found or not ((taf.get("from") or 0) <= ts < (taf.get("to") or 0)):
+        return None, tempo
+    return base, tempo
 
 
-def taf_tempo_wx(taf, ts):
-    out = []
-    for f in (taf or {}).get("fcsts", []):
-        if f.get("fcstChange") in ("TEMPO", "PROB") and (f.get("timeFrom") or 0) <= ts < (f.get("timeTo") or 0):
-            if f.get("wxString"):
-                out.append(f["wxString"])
-    return " ".join(out)
+def shoot_score(pop, precip, low, vis, base, tempo, metar_now):
+    """撮影条件 ◎/○/△ と、その理由（どの予報で決まったか）"""
+    why = []
+    poor = fair = False
+    if metar_now:
+        if metar_now.get("wx") and PRECIP_RE.search(metar_now["wx"]):
+            poor = True
+            why.append(f"実況 {wx_ja(metar_now['wx'])}")
+        if metar_now.get("vis") is not None and metar_now["vis"] < 3000:
+            poor = True
+            why.append(f"実況 視程{metar_now['vis']}m")
+    if pop is not None and pop >= 60:
+        poor = True
+        why.append(f"降水確率{pop}%")
+    elif pop is not None and pop >= 30:
+        fair = True
+        why.append(f"降水確率{pop}%")
+    if precip is not None and precip >= 1.0:
+        poor = True
+        why.append(f"雨{precip:.0f}mm/h")
+    if base:
+        if base.get("wx") and PRECIP_RE.search(base["wx"]):
+            poor = True
+            why.append(f"TAF {wx_ja(base['wx'])}")
+        if base.get("vis") is not None and base["vis"] < 3000:
+            poor = True
+            why.append(f"TAF 視程{base['vis']}m")
+        elif base.get("vis") is not None and base["vis"] < 8000:
+            fair = True
+        if base.get("ceil") is not None and base["ceil"] < 1000:
+            poor = True
+            why.append(f"TAF 雲底{base['ceil']}ft")
+        elif base.get("ceil") is not None and base["ceil"] < 3000:
+            fair = True
+            why.append(f"TAF 雲底{base['ceil']}ft")
+    for tp in tempo or []:
+        if tp.get("wx"):
+            fair = True
+            why.append(f"TAF {tp['kind']}{wx_ja(tp['wx'])}")
+    if low is not None and low >= 50:
+        fair = True
+        why.append(f"低い雲{low:.0f}%")
+    if vis is not None and not base and vis < 3000:
+        poor = True
+        why.append(f"視程{vis / 1000:.0f}km")
+    if pop is None and precip is None and low is None and not base:
+        return "?", ""
+    score = "poor" if poor else "fair" if fair else "good"
+    return score, "・".join(dict.fromkeys(why))
 
 
-def hourly_table(icao, wx, day, tz, live_cfg, now_utc):
-    """指定日の 0〜23時: 風・運用予測・撮影向き天気"""
+def hourly_table(icao, wx, day, tz, live_cfg, now_utc, start_code=None):
+    """指定日の 0〜23時: 風・運用予測・撮影条件。
+    風: いま=METAR（実況）→ TAF（空港の航空予報）→ 気象庁MSM → 汎用モデル
+    運用: 直近2時間は実際の運用。その先は今の運用から出発し、追い風が目安を超える時間に切り替わるとみなす
+    撮影条件: 降水確率=気象庁の予報、雲・雨量=気象庁MSM、視程・雲底・一時的な雨=TAF、いま=METAR"""
     w = wx.get(icao, {})
     om = (w.get("om") or {}).get("hourly") or {}
-    idx = {t: i for i, t in enumerate(om.get("time", []))}
+    msm = (w.get("msm") or {}).get("hourly") or {}
+    idx = {tt: i for i, tt in enumerate(om.get("time", []))}
+    idx2 = {tt: i for i, tt in enumerate(msm.get("time", []))}
+    metar = w.get("metar") or {}
+    nowts = now_utc.timestamp()
+    metar_fresh = metar.get("obsTime") and nowts - metar["obsTime"] < 5400
     rows = []
-    prev_code = None
+    prev_code = start_code
     for h in range(24):
         local = dt.datetime.combine(day, dt.time(h, 0), tz)
         ts = int(local.timestamp())
         key = local.strftime("%Y-%m-%dT%H:00")
-        i = idx.get(key)
+        i, j = idx.get(key), idx2.get(key)
 
-        def g(name):
-            arr = om.get(name) or []
-            return arr[i] if (i is not None and i < len(arr)) else None
+        def g(name, src=om, k=i):
+            arr = src.get(name) or []
+            return arr[k] if (k is not None and k < len(arr)) else None
 
-        src = "予報"
-        tw = taf_wind_at(w.get("taf"), ts)
-        if tw and tw[1] is not None:
-            wdir, wspd, src = tw[0], tw[1], "TAF"
+        is_now = ts <= nowts < ts + 3600
+        base, tempo = taf_state_at(w.get("taf"), ts + 1800)
+        # 風
+        if is_now and metar_fresh and metar.get("wspd") is not None:
+            wd = metar.get("wdir")
+            wdir, wspd, src = (None if isinstance(wd, str) else num(wd)), num(metar.get("wspd")), "METAR"
+        elif base and base.get("wspd") is not None:
+            wdir, wspd, src = base["wdir"], base["wspd"], "TAF"
+        elif g("wind_speed_10m", msm, j) is not None:
+            wdir, wspd, src = g("wind_direction_10m", msm, j), g("wind_speed_10m", msm, j), "気象庁MSM"
         else:
-            wdir, wspd = g("wind_direction_10m"), g("wind_speed_10m")
+            wdir, wspd, src = g("wind_direction_10m"), g("wind_speed_10m"), "予報"
+        # 運用
         code, conf = wind_config(icao, wdir, wspd, h)
-        # 直近2時間は実際の運用（進入機の向き）を優先
-        if live_cfg and live_cfg.get("code") and ts - now_utc.timestamp() < 7200 and ts + 3600 > now_utc.timestamp():
+        if icao in ("RJTT", "RJAA") and prev_code in ("N", "S", "S2") and wspd is not None:
+            u = wspd * math.cos(math.radians((wdir or 0) - (HND_AXIS if icao == "RJTT" else NRT_AXIS))) if wdir is not None else 0
+            cur = "N" if prev_code == "N" else "S"
+            tail = -u if cur == "N" else u
+            if tail > TAILWIND_SWITCH_KT:
+                cur = "S" if cur == "N" else "N"
+                conf = "見込み"
+            else:
+                conf = "見込み" if abs(u) >= 5 else "風弱く切替の可能性"
+            code = "S2" if (icao == "RJTT" and cur == "S" and 15 <= h < 19) else cur
+        if live_cfg and live_cfg.get("code") and ts - nowts < 7200 and ts + 3600 > nowts:
             lc = live_cfg["code"]
             if icao == "RJTT" and lc in ("S", "S2"):
                 lc = "S2" if 15 <= h < 19 else "S"
@@ -692,23 +917,30 @@ def hourly_table(icao, wx, day, tz, live_cfg, now_utc):
         if code == "X" and prev_code:
             code, conf = prev_code, "未確定"
         prev_code = code
-        cc, ccl, pp, pr, vis = g("cloud_cover"), g("cloud_cover_low"), g("precipitation_probability"), g("precipitation"), g("visibility")
-        score = "?"
-        if cc is not None:
-            if (pp or 0) >= 60 or (pr or 0) >= 1.0 or (vis is not None and vis < 3000):
-                score = "poor"
-            elif (pp or 0) < 30 and (ccl or 0) < 50 and (vis is None or vis >= 8000):
-                score = "good"
-            else:
-                score = "fair"
+        # 撮影条件
+        pop = jma_pop_at(w.get("jma"), ts + 1800)
+        pop_src = "気象庁"
+        if pop is None:
+            pop, pop_src = g("precipitation_probability"), "予報"
+        low = g("cloud_cover_low", msm, j)
+        cc = g("cloud_cover", msm, j)
+        pr = g("precipitation", msm, j)
+        if low is None:
+            low, cc, pr = g("cloud_cover_low"), g("cloud_cover"), g("precipitation")
+        vis = g("visibility")
+        mnow = None
+        if is_now and metar_fresh:
+            mnow = {"wx": metar.get("wxString"), "vis": _vis_m(metar.get("visib"))}
+        score, why = shoot_score(pop, pr, low, vis, base, tempo, mnow)
         rows.append({"h": h, "wdir": None if wdir is None else round(wdir), "wspd": None if wspd is None else round(wspd),
                      "gust": g("wind_gusts_10m"), "wsrc": src, "cfg": code, "cfgConf": conf,
-                     "cloud": cc, "cloudLow": ccl, "pop": pp, "precip": pr, "vis": vis,
-                     "code": g("weather_code"), "tempo": taf_tempo_wx(w.get("taf"), ts), "shoot": score})
+                     "cloud": cc, "cloudLow": low, "pop": pop, "popSrc": pop_src, "precip": pr, "vis": vis,
+                     "code": g("weather_code"), "tempo": " ".join(tp["wx"] for tp in tempo if tp.get("wx")),
+                     "shoot": score, "shootWhy": why})
     daily = (w.get("om") or {}).get("daily") or {}
     sun = {}
-    for i, t in enumerate(daily.get("time", [])):
-        if t == day.isoformat():
+    for i, tday in enumerate(daily.get("time", [])):
+        if tday == day.isoformat():
             sun = {"rise": (daily.get("sunrise") or [None])[i], "set": (daily.get("sunset") or [None])[i]}
     return rows, sun
 
@@ -717,42 +949,86 @@ def hourly_table(icao, wx, day, tz, live_cfg, now_utc):
 # 羽田 時刻表
 # --------------------------------------------------------------------------
 def fetch_timetable(net, cfg, state, now_local, tz, data_dir):
-    """今日・明日の時刻表（対応空港のみ）。30分に1回更新"""
+    """今日・明日の時刻表（羽田・成田の公式サイト）。30分に1回更新。空港ごとに失敗しても前回分で続ける"""
     path = os.path.join(data_dir, "timetable.json")
     tt = load_json(path, {})
     days = [now_local.date(), now_local.date() + dt.timedelta(days=1)]
-    need = ("RJTT" in cfg["airports"]) and (
-        now_local.timestamp() - (tt.get("_at") or 0) > 1700 or tt.get("_days") != [d.isoformat() for d in days])
-    if not need:
+    day_isos = [d.isoformat() for d in days]
+    want = [ic for ic in cfg["airports"] if AIRPORT_INFO.get(ic, {}).get("timetable")]
+    if not want:
         return tt
-    out = {"_at": now_local.timestamp(), "_days": [d.isoformat() for d in days], "RJTT": {}}
-    ok = 0
-    for d in days:
-        ymd = d.strftime("%Y%m%d")
-        rows = []
-        for ftype, atype, region, direction in ((1, 1, "dom", "dep"), (1, 2, "dom", "arr"),
-                                                (2, 1, "int", "dep"), (2, 2, "int", "arr")):
-            try:
-                for rec in net.haneda(ftype, atype, ymd):
-                    r = haneda_row(rec, region, direction)
-                    if r:
-                        rows.append(r)
-                ok += 1
-            except Exception as e:  # noqa: BLE001
-                LOG.err(f"羽田時刻表 {ymd} {region}-{direction}", e)
-        out["RJTT"][d.isoformat()] = rows
-    if ok == 0 and tt.get("RJTT"):
-        LOG.note("羽田時刻表: 取得失敗のため前回分を使用")
+    if now_local.timestamp() - (tt.get("_at") or 0) <= 1700 and tt.get("_days") == day_isos \
+            and all(ic in tt for ic in want):
         return tt
+    out = {"_at": now_local.timestamp(), "_days": day_isos}
+    for ic in want:
+        kind = AIRPORT_INFO[ic]["timetable"]
+        got, ok = {}, 0
+        for d in days:
+            rows = []
+            if kind == "haneda":
+                ymd = d.strftime("%Y%m%d")
+                for ftype, atype, region, direction in ((1, 1, "dom", "dep"), (1, 2, "dom", "arr"),
+                                                        (2, 1, "int", "dep"), (2, 2, "int", "arr")):
+                    try:
+                        for rec in net.haneda(ftype, atype, ymd):
+                            r = haneda_row(rec, region, direction)
+                            if r:
+                                rows.append(r)
+                        ok += 1
+                    except Exception as e:  # noqa: BLE001
+                        LOG.err(f"羽田時刻表 {ymd} {region}-{direction}", e)
+            elif kind == "narita":
+                for di, da, region, direction in (("I", "A", "int", "arr"), ("I", "D", "int", "dep"),
+                                                  ("D", "A", "dom", "arr"), ("D", "D", "dom", "dep")):
+                    try:
+                        for rec in net.narita(di, da, d.isoformat()):
+                            r = narita_row(rec, region, direction)
+                            if r:
+                                rows.append(r)
+                        ok += 1
+                    except Exception as e:  # noqa: BLE001
+                        LOG.err(f"成田時刻表 {d.isoformat()} {region}-{direction}", e)
+            got[d.isoformat()] = rows
+        if ok == 0 and tt.get(ic):
+            LOG.note(f"{AIRPORT_INFO[ic]['name']}時刻表: 取得失敗のため前回分を使用")
+            got = {k: v for k, v in tt[ic].items() if k in day_isos}
+        out[ic] = got
     save_json(path, out)
     # 航空会社 ICAO→IATA 対応を学習
     amap = state.setdefault("airline_map", {})
-    for rows in out["RJTT"].values():
-        for r in rows:
-            m = re.match(r"^([A-Z0-9]{2})\d", r["fl"])
-            if r.get("al") and m and len(r["al"]) == 3:
-                amap[r["al"]] = m.group(1)
+    for ic in want:
+        for rows in out.get(ic, {}).values():
+            for r in rows:
+                m = re.match(r"^([A-Z0-9]{2})\d", r["fl"])
+                if r.get("al") and m and len(r["al"]) == 3:
+                    amap[r["al"]] = m.group(1)
     return out
+
+
+def narita_row(rec, region, direction):
+    fl = fl_norm(rec.get("flightCode") or rec.get("displayFlightCode") or "")
+    on = hhmm_ok(rec.get("scheduledTime"))
+    if not fl or not on:
+        return None
+    chg = hhmm_ok(rec.get("changeScheduledTime"))
+    ap = (rec.get("airport") or {})
+    orig = ap.get("original") or next((v for v in ap.values() if isinstance(v, dict)), {}) or {}
+    st = (rec.get("status") or {}).get("status", "") if isinstance(rec.get("status"), dict) else ""
+    cat = ("arrived" if st in ("到着", "旅客降機") or "到着済" in st else "departed" if "出発済" in st
+           else "cancelled" if "欠航" in st else "")
+    return {"dir": direction, "region": region, "fl": fl,
+            "al": ((rec.get("airline") or {}).get("3LetterCode") or ""),
+            "cs": [fl_norm(c.get("codeShareNo", "")) for c in (rec.get("codeShare") or []) if c.get("codeShareNo")],
+            "time": on, "rev": chg if chg and chg != on else "",
+            "ap": orig.get("name") or orig.get("3LetterCode") or "", "apc": orig.get("3LetterCode") or "",
+            "via": "", "term": rec.get("displayTerminal") or "", "status": "" if st in ("共同運航便", "定刻") else st,
+            "cat": cat}
+
+
+def row_code(r):
+    """時刻表の相手空港 → IATA（成田は公式データにコードあり、羽田は都市名から）"""
+    return r.get("apc") or GEO["ja2iata"].get(r.get("ap") or "")
 
 
 def haneda_row(rec, region, direction):
@@ -1067,7 +1343,19 @@ def ac_norm(a):
             "desc": a.get("desc") or "", "lat": num(a.get("lat")), "lon": num(a.get("lon")),
             "alt": 0.0 if ground else num(alt), "ground": ground, "gs": num(a.get("gs")),
             "trk": num(a.get("track")), "vr": num(a.get("baro_rate") if a.get("baro_rate") is not None else a.get("geom_rate")),
-            "flags": int(a.get("dbFlags") or 0), "seen": num(a.get("seen_pos")) or 0}
+            "flags": int(a.get("dbFlags") or 0), "seen": num(a.get("seen_pos")) or 0,
+            "sqk": str(a.get("squawk") or ""), "emergency": str(a.get("emergency") or "")}
+
+
+EMG_SQUAWK = {"7700": "緊急事態（7700）", "7600": "無線故障（7600）", "7500": "ハイジャック（7500）"}
+EMG_FIELD = {"general": "緊急事態", "nordo": "無線故障", "unlawful": "ハイジャック", "minfuel": "燃料不足",
+             "downed": "緊急事態"}
+
+
+def emg_label(a):
+    if a.get("sqk") in EMG_SQUAWK:
+        return EMG_SQUAWK[a["sqk"]]
+    return EMG_FIELD.get(a.get("emergency") or "")
 
 
 def classify(a, watch, cfg, pa=None, regulars=()):
@@ -1152,20 +1440,7 @@ def airport_latlon(icao, state):
     raise KeyError(f"空港 {icao} の座標が分かりません")
 
 
-def best_heading_target(a, aps, state, include_mil=True):
-    """機首の向きに最も合う空港（撮影拠点＋近隣の基地）。(空港, 距離nm, 角度差)"""
-    cands = [(ic,) + tuple(airport_latlon(ic, state)) for ic in aps]
-    if include_mil:
-        cands += [(code, la, lo) for code, (_, la, lo) in MIL_FIELDS.items()]
-    best = None
-    for code, la, lo in cands:
-        d = nm_between(la, lo, a["lat"], a["lon"])
-        diff = ang_diff(a["trk"], bearing(a["lat"], a["lon"], la, lo))
-        # 近い空港ほど角度のずれが大きくなりやすいので、距離で少し補正して比べる
-        score = diff - min(10.0, 150.0 / max(d, 5.0))
-        if best is None or score < best[3]:
-            best = (code, d, diff, score)
-    return best
+NOTABLE = ("watch", "type", "mil", "emg")
 
 
 def process_live(net, cfg, state, watch, now_utc, tz, tt, pa=None):
@@ -1237,11 +1512,28 @@ def process_live(net, cfg, state, watch, now_utc, tz, tt, pa=None):
                 LOG.err("ADS-B 政府機の全世界照会", e)
         state["gvip_total"] = len(hexes)
 
+    # 4) 緊急信号（7700/7600/7500）を世界中から。撮影拠点から500nm以内のものだけ扱う
+    for code in EMG_SQUAWK:
+        try:
+            for x in net.squawk(code):
+                a = ac_norm(x)
+                if a["lat"] is not None and min(nm_between(*airport_latlon(ic, state), a["lat"], a["lon"])
+                                                for ic in aps) <= 500:
+                    add(a)
+        except Exception as e:  # noqa: BLE001
+            LOG.err(f"ADS-B 緊急信号 {code} の照会", e)
+            break
+
     # 分類（経路は不要）
     regulars = pa_regulars(cfg, state, dt.datetime.fromtimestamp(nowts, tz).date())
     for a in seen.values():
         a["sev"], a["why"] = classify(a, watch, cfg, pa, regulars)
         a["fl"] = cs_to_fl(a["cs"], state)
+        lab = emg_label(a)
+        if lab and not a["ground"]:
+            a["emg"] = lab
+            a["why"] = lab + (f"／{a['why']}" if a["why"] else "")
+            a["sev"] = "emg"
 
     # 4) 経路（コールサイン→出発/到着）: 当日キャッシュ。注目機と空港近くの機体だけ問い合わせる
     rc = state.setdefault("routes", {})
@@ -1250,10 +1542,10 @@ def process_live(net, cfg, state, watch, now_utc, tz, tt, pa=None):
         del rc[k]
     near = {a["hex"] for lst in area_by_ap.values() for a in lst}
     ask = []
-    for a in sorted(seen.values(), key=lambda a: (0 if a["sev"] in ("watch", "type", "mil") else 1)):
+    for a in sorted(seen.values(), key=lambda a: (0 if a["sev"] in NOTABLE else 1)):
         if not a["cs"] or a["ground"] or a["cs"] in rc or not re.match(r"^[A-Z]{3}\d", a["cs"]):
             continue
-        if a["sev"] in ("watch", "type", "mil") or a["hex"] in near:
+        if a["sev"] in NOTABLE or a["hex"] in near:
             ask.append({"callsign": a["cs"], "lat": round(a["lat"], 3), "lng": round(a["lon"], 3)})
     if ask:
         try:
@@ -1275,8 +1567,12 @@ def process_live(net, cfg, state, watch, now_utc, tz, tt, pa=None):
     #    一度つかんだ到着予定は到着予想時刻まで消さない
     inb = state.setdefault("inbound", {})
     outb = state.setdefault("outbound", {})
+    desc = []
+    # 以前の版で機首の向きから推定した到着予定は使わない
+    for k in [k for k, v in inb.items() if v.get("geo")]:
+        del inb[k]
     for a in seen.values():
-        if a["ground"] or a["sev"] not in ("watch", "type", "mil") or not a["gs"]:
+        if a["ground"] or a["sev"] not in NOTABLE or not a["gs"]:
             continue
         key = f"{a['hex']}|{a['cs'] or '-'}"
         base = {"hex": a["hex"], "reg": a["reg"], "type": a["type"], "cs": a["cs"], "fl": a["fl"],
@@ -1294,15 +1590,40 @@ def process_live(net, cfg, state, watch, now_utc, tz, tt, pa=None):
                                 first=inb.get(key, {}).get("first", nowts))
             elif orig in aps:
                 outb[key] = dict(base, orig=orig, dest=dest, eta_dest=eta)
-        elif a["sev"] in ("type", "mil") and a["alt"] is not None and a["alt"] < 25000 and (a["vr"] or 0) < -300 \
-                and a["trk"] is not None:
-            # 経路不明（軍用機など）: 広域圏内で降下しながら空港へ向かっている。
-            # 羽田と成田は約30nmしか離れていないため、最も向きの合う空港を1つだけ選ぶ
-            best = best_heading_target(a, aps, state, include_mil=(a["sev"] == "mil"))
-            if best and best[0] in aps and R < best[1] <= W and best[2] <= 25:
-                ic, d = best[0], best[1]
-                inb[key] = dict(base, dest=ic, orig=None, eta=nowts + d / max(a["gs"], 150) * 3600 + 300,
-                                dist=round(d), geo=True, first=inb.get(key, {}).get("first", nowts))
+        elif a["alt"] is not None and a["alt"] < 25000 and (a["vr"] or 0) < -300:
+            # 経路不明: 空港付近では進入経路に沿って大きく曲がるため、機首の向きでは行き先を決めない。
+            # 「撮影拠点の周辺で降下中（行き先不明）」として画面に出すだけ（通知しない）
+            ds = {ic: nm_between(*airport_latlon(ic, state), a["lat"], a["lon"]) for ic in aps}
+            if min(ds.values()) <= W:
+                desc.append({"hex": a["hex"], "reg": a["reg"], "type": a["type"], "cs": a["cs"], "sev": a["sev"],
+                             "why": a["why"], "alt": int(a["alt"]), "dist": {k: round(v) for k, v in ds.items()},
+                             "lat": round(a["lat"], 3), "lon": round(a["lon"], 3)})
+    state["descending"] = sorted(desc, key=lambda x: min(x["dist"].values()))[:12]
+    # 緊急信号の機体（画面の先頭に出す）
+    emg = []
+    for a in seen.values():
+        if a.get("emg"):
+            route = a.get("route") or []
+            emg.append({"hex": a["hex"], "reg": a["reg"], "type": a["type"], "cs": a["cs"], "fl": a.get("fl"),
+                        "label": a["emg"], "why": a["why"], "alt": None if a["alt"] is None else int(a["alt"]),
+                        "route": route, "to": route[-1] if route else None,
+                        "routeTxt": "→".join(ap_label(c) for c in route) if len(route) >= 2 else "",
+                        "dist": {ic: round(nm_between(*airport_latlon(ic, state), a["lat"], a["lon"])) for ic in aps},
+                        "lat": round(a["lat"], 3), "lon": round(a["lon"], 3)})
+    state["emergencies"] = sorted(emg, key=lambda x: min(x["dist"].values()))
+    # 注目機の航跡（誤り報告の調査用。最大6時間・24点）
+    tracks = state.setdefault("tracks", {})
+    for a in seen.values():
+        if a.get("sev") and a["lat"] is not None:
+            lst = tracks.setdefault(a["hex"], [])
+            lst.append([int(nowts), round(a["lat"], 4), round(a["lon"], 4), None if a["alt"] is None else int(a["alt"]),
+                        None if a["trk"] is None else int(a["trk"]), None if a["gs"] is None else int(a["gs"]),
+                        None if a["vr"] is None else int(a["vr"]), a["cs"], a.get("sev"), a["reg"], a.get("fl")])
+            del lst[:-24]
+    for h in list(tracks):
+        tracks[h] = [x for x in tracks[h] if nowts - x[0] < 6 * 3600]
+        if not tracks[h]:
+            del tracks[h]
     for k in [k for k, v in inb.items() if nowts > v["eta"] + 1800]:
         del inb[k]
     for k in [k for k, v in outb.items() if nowts > v["eta_dest"] + 36 * 3600]:
@@ -1321,6 +1642,9 @@ def process_live(net, cfg, state, watch, now_utc, tz, tt, pa=None):
         elif rw_state.get(ic) and nowts - rw_state[ic]["at"] > 2400:
             rw_state[ic]["stale"] = True
         record_movements(ic, acs, arr, dep, a_lookup=None, mv=mv, state=state, now_utc=now_utc, tz=tz, ttx=ttx, aps=aps)
+    # 最終進入に入って空港が分かった機体・到着予定がある機体は「行き先不明で降下中」から外す
+    known = {v["hex"] for v in mv.values() if nowts - v.get("last", 0) < 60} | {v["hex"] for v in inb.values()}
+    state["descending"] = [x for x in state.get("descending", []) if x["hex"] not in known]
     return live, watched_air, area_by_ap
 
 
@@ -1372,7 +1696,7 @@ def movement_direction(ic, a, ttx, date_iso):
         for d in ("arr", "dep"):
             r = ttx.get((ic, date_iso, d, fl))
             if r:
-                return d, fl, r["ap"], "時刻表"
+                return d, fl, row_code(r) or r["ap"], "時刻表"
     route = a.get("route")
     if route and len(route) >= 2:
         if route[-1] == ic:
@@ -1385,6 +1709,27 @@ def movement_direction(ic, a, ttx, date_iso):
     return None, fl, None, "不明"
 
 
+def runway_gate(ic, a):
+    """滑走路の延長線上で最終進入中（arr）／離陸直後（dep）なら (向き, 滑走路)"""
+    if a["ground"] or a["trk"] is None or a["alt"] is None:
+        return None
+    for e in airport_ends(ic):
+        x, y = local_xy(e["lat"], e["lon"], a["lat"], a["lon"])
+        h = math.radians(e["hdg"])
+        along = x * math.sin(h) + y * math.cos(h)
+        cross = x * math.cos(h) - y * math.sin(h)
+        if ang_diff(a["trk"], e["hdg"]) > 22:
+            continue
+        # 最終進入: 滑走路の延長線上20nm以内（5〜10分おきの観測でも取り逃がさないよう、合流直後から拾う）
+        if -20 <= along <= 0.3 and a["alt"] < 1500 + 350 * abs(along) and a["alt"] < 7500 \
+                and abs(cross) < 0.6 + 0.05 * abs(along) and (a["vr"] is None or a["vr"] <= 300):
+            return ("arr", e["id"])
+        if e["len"] <= along <= e["len"] + 7 and abs(cross) < 1.0 and a["alt"] < 1800 + 700 * (along - e["len"]) \
+                and (a["vr"] is None or a["vr"] >= 0):
+            return ("dep", e["id"])
+    return None
+
+
 def record_movements(ic, acs, arr_votes, dep_votes, a_lookup, mv, state, now_utc, tz, ttx, aps=None):
     lat0, lon0 = airport_latlon(ic, state)
     ends = airport_ends(ic)
@@ -1395,35 +1740,32 @@ def record_movements(ic, acs, arr_votes, dep_votes, a_lookup, mv, state, now_utc
         d = nm_between(lat0, lon0, a["lat"], a["lon"])
         local_date = dt.datetime.fromtimestamp(nowts, tz).date().isoformat()
         direction, fl, other, basis = movement_direction(ic, a, ttx, local_date)
-        diff = None
+        gnd_dep = False
         if a["ground"]:
             if d > 3:
                 continue
-            # 地上で出発便名を出している機体＝駐機・地上走行中
-            if direction != "arr":
+            # 地上で信号を出し始めた機体（プッシュバック・エンジン始動後など）。
+            # 出発便名なら「出発準備中」、着陸して間もない機体は到着、便名なしで止まっていれば駐機
+            recent_arr = any(v.get("hex") == a["hex"] and v.get("dir") == "arr" and v.get("ap") == ic
+                             and nowts - v.get("last", 0) < 5400 for v in mv.values())
+            if direction == "dep":
+                gnd_dep = True
+            elif direction == "arr" or recent_arr:
+                direction = "arr"
+            elif a["cs"] and (a["gs"] or 0) >= 3:
+                direction, gnd_dep, basis = "dep", True, "地上走行"
+            else:
                 direction = "ground"
         elif direction is None:
-            # 幾何で推定（経路不明の軍用機・自家用機など）
-            if a["alt"] > 15000 or d > 40 or a["trk"] is None:
-                continue
-            # 別の撮影拠点空港へ向かっていると分かっている機体は除く（例: 成田行きが羽田の近くを通る）
-            if any(k.startswith(a["hex"] + "|") and v.get("dest") != ic for k, v in state.get("inbound", {}).items()):
-                continue
-            brg_to = bearing(a["lat"], a["lon"], lat0, lon0)
-            diff = ang_diff(a["trk"], brg_to)
-            if a["vr"] is not None and a["vr"] < -400 and diff < 30 and d <= 30:
-                direction = "arr"
-            elif a["vr"] is not None and a["vr"] > 400 and diff > 110 and d < 25:
-                direction = "dep"
-            elif a["alt"] < 3000 and d < 8:
-                direction = "arr" if diff < 70 else "dep"
+            # 経路不明の機体は、機首の向きでは判定しない（空港付近は進入経路に沿って大きく曲がるため）。
+            # 滑走路の延長線上の最終進入・離陸直後、または空港のごく近く（5nm以内・2,000ft未満）だけで判定する
+            gate = runway_gate(ic, a)
+            if gate:
+                direction = gate[0]
+            elif a["alt"] < 2000 and d < 5 and a["vr"] is not None and abs(a["vr"]) >= 300:
+                direction = "arr" if a["vr"] < 0 else "dep"
             else:
                 continue
-            # 別の撮影拠点空港・近隣の基地の方が向きに合っていれば採用しない
-            if direction == "arr" and d > 8:
-                best = best_heading_target(a, aps or [ic], state, include_mil=True)
-                if best and best[0] != ic:
-                    continue
             if a["sev"] == "mil" and direction == "arr":
                 for code, (nm_, la, lo) in MIL_FIELDS.items():
                     if nm_between(la, lo, a["lat"], a["lon"]) < d * 0.7:
@@ -1439,6 +1781,15 @@ def record_movements(ic, acs, arr_votes, dep_votes, a_lookup, mv, state, now_utc
         gs = max(a["gs"] or 0, 120)
         if direction == "arr":
             evt = nowts + (d / gs) * 3600 + (0 if a["ground"] else 120)
+        elif gnd_dep:
+            # 離陸時刻の見込み: 時刻表の出発時刻（変更後）か、地上で見えてから10分後の遅い方
+            row = ttx.get((ic, local_date, "dep", fl)) if fl else None
+            sched = None
+            if row:
+                m_ = _hhmm_to_min(row.get("rev") or row.get("time"))
+                if m_ is not None:
+                    sched = dt.datetime.combine(dt.date.fromisoformat(local_date), dt.time(m_ // 60, m_ % 60), tz).timestamp()
+            evt = max(sched or 0, nowts + 600) if sched else nowts + 900
         elif direction == "dep":
             evt = nowts - (d / gs) * 3600
         else:
@@ -1459,8 +1810,8 @@ def record_movements(ic, acs, arr_votes, dep_votes, a_lookup, mv, state, now_utc
         if not rec:
             rec = {"ap": ic, "dir": direction, "hex": a["hex"], "reg": a["reg"], "type": a["type"],
                    "cs": a["cs"], "fl": fl, "other": other, "basis": basis, "sev": a["sev"], "why": a["why"],
-                   "first": nowts, "last": nowts, "evt": evt, "rwy": rwy, "date": local_date, "landed": a["ground"],
-                   "gdiff": None if basis != "位置" or diff is None else round(diff)}
+                   "first": nowts, "last": nowts, "evt": evt, "rwy": rwy, "date": local_date,
+                   "landed": a["ground"] and direction == "arr", "gnd": gnd_dep, "gnd_at": nowts if gnd_dep else None}
             mv[key] = rec
         else:
             rec["last"] = nowts
@@ -1468,10 +1819,16 @@ def record_movements(ic, acs, arr_votes, dep_votes, a_lookup, mv, state, now_utc
             if direction == "arr" and not rec.get("landed") and not a["ground"]:
                 rec["evt"] = evt
             if direction == "dep":
-                rec["evt"] = min(rec["evt"], evt)
+                if gnd_dep:
+                    if rec.get("gnd"):
+                        rec["evt"] = evt  # まだ地上: 遅れに合わせて更新
+                elif rec.get("gnd"):
+                    rec["evt"], rec["gnd"], rec["airborne"] = evt, False, True  # 離陸を確認
+                else:
+                    rec["evt"] = min(rec["evt"], evt)
             if rwy:
                 rec["rwy"] = rwy
-            if a["ground"]:
+            if a["ground"] and direction == "arr":
                 rec["landed"] = True
             rec["reg"] = rec["reg"] or a["reg"]
             rec["type"] = rec["type"] or a["type"]
@@ -1587,8 +1944,10 @@ def build_plan(cfg, state, watch, live, watched_air, tt, wx, now_utc, tz, pa=Non
             "metar": (wx.get(ic) or {}).get("metar"),
             "taf": ((wx.get(ic) or {}).get("taf") or {}).get("raw"),
         }
+        carry = (live_cfg or {}).get("code")
         for day in days:
-            hours, sun = hourly_table(ic, wx, day, tz, live_cfg, now_utc)
+            hours, sun = hourly_table(ic, wx, day, tz, live_cfg, now_utc,
+                                      start_code=carry if day == days[0] else hours[-1]["cfg"])
             events = events_for(ic, day, cfg, state, watch, live, watched_air, tt, ttx, now_utc, tz)
             for ev in events:
                 h = int(ev["time"][:2]) if ev.get("time") else (ev["hours"][0] if ev.get("hours") else 12)
@@ -1597,6 +1956,7 @@ def build_plan(cfg, state, watch, live, watched_air, tt, wx, now_utc, tz, pa=Non
                 ev["rwy"] = ev.get("rwyActual") or predict_runway(ic, row["cfg"], ev["dir"], ev.get("otherCode") or ev.get("other"), ev.get("type"), cfg)
                 ev["rwyConf"] = "実績" if ev.get("rwyActual") else row["cfgConf"]
                 ev["shoot"] = row["shoot"]
+                ev["shootWhy"] = row.get("shootWhy")
             events.sort(key=lambda e: (e.get("time") or "%02d:00" % (e["hours"][0] if e.get("hours") else 23)))
             ap_out["days"][day.isoformat()] = {
                 "label": "今日" if day == days[0] else "明日",
@@ -1658,21 +2018,29 @@ def events_for(ic, day, cfg, state, watch, live, watched_air, tt, ttx, now_utc, 
                 continue
             t = dt.datetime.fromtimestamp(m["evt"], tz)
             tt_row = ttx.get((ic, d_iso, m["dir"], m.get("fl"))) if m.get("fl") else None
-            past = m["evt"] < now_utc.timestamp() - 300
-            status = ("到着済" if m.get("landed") else ("着陸見込み" if not past else "到着済")) if m["dir"] == "arr" else \
-                     ("出発済" if m["dir"] == "dep" else "駐機中")
+            nts = now_utc.timestamp()
+            past = m["evt"] < nts - 300
+            reason = "最終進入・離陸直後の位置で確認（経路情報なし）" if m.get("basis") == "位置" else "ADS-Bで確認"
+            if m["dir"] == "dep" and m.get("gnd"):
+                # 地上で信号を確認した出発便（プッシュバック・エンジン始動後など）。見えなくなって20分で済とする
+                past = nts - m["last"] > 1200
+                status = "出発準備中"
+                reason = (dt.datetime.fromtimestamp(m.get("gnd_at") or m["first"], tz).strftime("%H:%M")
+                          + " に地上で信号を確認（プッシュバック・地上走行中）。離陸はおよそ10〜25分後")
+            elif m["dir"] == "ground":
+                past = nts - m["last"] > 1200
+                status = "駐機中"
+                reason = dt.datetime.fromtimestamp(m["last"], tz).strftime("%H:%M") + " 時点で地上に駐機（便名なし）"
+            else:
+                status = ("到着済" if m.get("landed") else ("着陸見込み" if not past else "到着済")) if m["dir"] == "arr" \
+                    else "出発済"
             put({"key": f"{m['dir']}|{m.get('fl') or m['hex']}", "dir": m["dir"], "time": t.strftime("%H:%M"),
                  "fl": m.get("fl") or m.get("cs"), "reg": m.get("reg"), "hex": m["hex"], "type": m.get("type"),
                  "name": m.get("why"), "cat": m["sev"],
-                 "conf": "有力" if (m.get("basis") == "位置" and m["dir"] == "arr" and not m.get("rwy")
-                                   and not m.get("landed") and (m.get("gdiff") is None or m["gdiff"] >= 15)) else "確定",
-                 "status": status,
+                 "conf": "確定", "status": status,
                  "other": ap_label(m.get("other")) if m.get("other") and not tt_row else (tt_row or {}).get("ap", ""),
                  "otherCode": m.get("other"), "sched": (tt_row or {}).get("time"), "rwyActual": m.get("rwy"),
-                 "reason": ("空港へまっすぐ降下中（経路情報なし）" if m.get("basis") == "位置" and not m.get("rwy")
-                            and (m.get("gdiff") or 99) < 15 else
-                            "位置と向きから推定（経路情報なし）" if m.get("basis") == "位置" and not m.get("rwy")
-                            else "ADS-Bで確認"), "past": past or m["dir"] == "ground"})
+                 "reason": reason, "past": past})
 
     # (B) 飛行中の注目機: この空港へ向かっている（確定）／この空港を出て折り返してくる（有力）
     nowts = now_utc.timestamp()
@@ -1726,13 +2094,13 @@ def events_for(ic, day, cfg, state, watch, live, watched_air, tt, ttx, now_utc, 
             put({"key": f"{r['dir']}|{r['fl']}", "dir": r["dir"], "time": r["rev"] or r["time"], "sched": r["time"],
                  "fl": r["fl"], "reg": None, "type": top, "name": f"{top} で運航されることが多い便",
                  "cat": "type", "conf": "有力" if rare_n >= 3 else "傾向", "status": r.get("status", ""),
-                 "other": r["ap"], "otherCode": GEO["ja2iata"].get(r["ap"]),
+                 "other": r["ap"], "otherCode": row_code(r),
                  "reason": f"直近{len(types)}回中{rare_n}回が{top}", "past": r.get("cat") in ("arrived", "departed")})
         elif watch_n >= 2 and watch_n / len(regs) >= 0.4:
             top = max(set(x for x in regs if x in watch), key=regs.count)
             put({"key": f"{r['dir']}|{r['fl']}", "dir": r["dir"], "time": r["rev"] or r["time"], "sched": r["time"],
                  "fl": r["fl"], "reg": top, "type": None, "name": watch[top]["name"], "cat": "watch", "conf": "傾向",
-                 "status": r.get("status", ""), "other": r["ap"], "otherCode": GEO["ja2iata"].get(r["ap"]),
+                 "status": r.get("status", ""), "other": r["ap"], "otherCode": row_code(r),
                  "reason": f"直近{len(regs)}回中{watch_n}回を{top}が担当", "past": r.get("cat") in ("arrived", "departed")})
 
     # (D) 監視機の来訪パターン（明日、または今日まだ動いていない機体）
@@ -1856,13 +2224,14 @@ def predict_return(ic, r, tt, tz, day):
     days_tt = tt.get(ic) or {}
     where = f"{ap_label(dest)}へ飛行中（{arr_dest.strftime('%m/%d %H:%M').lstrip('0')}着見込み）"
     cands = []
-    if prefix and names:
+    if prefix and (names or dest_iata):
         for d_iso2, rows in days_tt.items():
             if d_iso2.startswith("_"):
                 continue
             d2 = dt.date.fromisoformat(d_iso2)
             for row in rows:
-                if row["dir"] != "arr" or row["ap"] not in names or not row["fl"].startswith(prefix):
+                if row["dir"] != "arr" or (row["ap"] not in names and row.get("apc") != dest_iata) \
+                        or not row["fl"].startswith(prefix):
                     continue
                 m = _hhmm_to_min(row["time"])
                 if m is None:
@@ -1972,11 +2341,19 @@ def notify_all(net, cfg, state, plan, now_utc, tz, site_url):
     today = now_local.date().isoformat()
     quiet = n["quiet_start"] <= now_local.hour or now_local.hour < n["quiet_end"]
 
-    def send(key, title, msg, pri=3):
+    rep = plan.get("report") or {}
+
+    def send(key, title, msg, pri=3, report=False):
         if key in sent:
             return
+        actions = None
+        if report and rep.get("topic"):
+            body = json.dumps({"src": "通知", "key": key, "title": title, "msg": msg[:300], "reason": "通知が間違い"},
+                              ensure_ascii=False)
+            actions = [{"action": "http", "label": "間違いを報告", "url": f"{rep['server'].rstrip('/')}/{rep['topic']}",
+                        "method": "POST", "body": body, "clear": True}]
         try:
-            net.notify(n["server"], topic, title, msg, click=site_url, priority=pri)
+            net.notify(n["server"], topic, title, msg, click=site_url, priority=pri, actions=actions)
             sent[key] = now_utc.timestamp()
         except Exception as e:  # noqa: BLE001
             LOG.err("通知", e)
@@ -2005,7 +2382,7 @@ def notify_all(net, cfg, state, plan, now_utc, tz, site_url):
     for ic, ap in plan["airports"].items():
         for d_iso, day in ap["days"].items():
             for e in day["events"]:
-                if e["conf"] != "確定" or e.get("status") != "飛行中" or e["cat"] not in ("watch", "type", "mil"):
+                if e["conf"] != "確定" or e.get("status") != "飛行中" or e["cat"] not in NOTABLE:
                     continue
                 if (e.get("leftH") or 0) < n["live_minutes"] / 60:
                     continue  # 間近のものは下の「接近」通知に任せる
@@ -2013,14 +2390,14 @@ def notify_all(net, cfg, state, plan, now_utc, tz, site_url):
                 when = ("今日" if dd == now_local.date() else f"{dd.month}/{dd.day}") + f" {e.get('time')}"
                 msg = (f"{when}着（{e.get('reason', '')}）\n{e.get('fl') or ''} {e.get('other') or ''}"
                        f"\n{e.get('reg') or ''} {e.get('type') or ''} {e.get('name') or ''}")
-                send(f"confirmed|{ic}|{d_iso}|{e['key']}", f"{ap['name']}着が確定: {e.get('reg') or e.get('type') or e.get('fl')}", msg, 4)
+                send(f"confirmed|{ic}|{d_iso}|{e['key']}", f"{ap['name']}着が確定: {e.get('reg') or e.get('type') or e.get('fl')}", msg, 4, True)
     horizon = now_utc.timestamp() + n["live_minutes"] * 60
     for ic, ap in plan["airports"].items():
         day = ap["days"].get(today)
         if not day:
             continue
         for e in day["events"]:
-            if e["conf"] != "確定" or e.get("past") or e["cat"] not in ("watch", "type", "mil") or not e.get("time"):
+            if e["conf"] != "確定" or e.get("past") or e["cat"] not in NOTABLE or not e.get("time"):
                 continue
             m = _hhmm_to_min(e["time"])
             if m is None:
@@ -2029,12 +2406,105 @@ def notify_all(net, cfg, state, plan, now_utc, tz, site_url):
             if not (now_utc.timestamp() - 600 <= t <= horizon):
                 continue
             mins = int((t - now_utc.timestamp()) // 60)
+            if e["dir"] not in ("arr", "dep"):
+                continue
             verb = "着" if e["dir"] == "arr" else "発"
-            msg = (f"{e['time']}{verb}（約{max(mins, 0)}分後）{e.get('fl') or ''} {e.get('other') or ''}"
+            head = "出発準備中・" if e.get("status") == "出発準備中" else ""
+            msg = (f"{head}{e['time']}{verb}（約{max(mins, 0)}分後）{e.get('fl') or ''} {e.get('other') or ''}"
                    f"\n{e.get('reg') or ''} {e.get('type') or ''} {e.get('name') or ''}\n滑走路 {e.get('rwy')}（{e.get('rwyConf')}）")
-            send(f"live|{ic}|{today}|{e['key']}", f"{ap['name']}に来ます: {e.get('reg') or e.get('fl')}", msg, 4)
+            title = (f"{ap['name']}に来ます: " if e["dir"] == "arr" else f"{ap['name']}から出発: ") + (e.get('reg') or e.get('fl') or "")
+            send(f"live|{ic}|{today}|{e['key']}", title, msg, 4, True)
+    # 緊急信号（撮影拠点から300nm以内）: 1機・1コードにつき1回
+    for x in plan.get("emergencies") or []:
+        near_ic = min(x["dist"], key=x["dist"].get)
+        if x["dist"][near_ic] > 300:
+            continue
+        name = AIRPORT_INFO.get(near_ic, {}).get("name", near_ic)
+        to = f"{ap_label(x['route'][0])}→{ap_label(x['to'])}" if x.get("route") and len(x["route"]) >= 2 else "行き先不明"
+        msg = (f"{x['label']}　{name}から{x['dist'][near_ic]}nm・高度{x['alt'] if x['alt'] is not None else '?'}ft\n"
+               f"{x.get('fl') or x.get('cs') or ''} {to}\n{x.get('reg') or ''} {x.get('type') or ''}")
+        send(f"emg|{today}|{x['hex']}|{x['label']}", f"緊急信号: {x.get('reg') or x.get('cs') or x['hex']}", msg, 5, True)
     for k in [k for k, v in sent.items() if now_utc.timestamp() - v > 3 * 86400]:
         del sent[k]
+
+
+# --------------------------------------------------------------------------
+# 誤り報告（画面の「違う」ボタン・通知の「間違いを報告」ボタン → ntfy → ここで受け取って保存）
+# --------------------------------------------------------------------------
+def report_topic(state):
+    """報告の受け口。通知用の合言葉とは別の名前にする（ページに載るため）"""
+    import hashlib
+    base = os.environ.get("NTFY_TOPIC", "").strip()
+    if base:
+        return "rb-report-" + hashlib.sha256((base + "|report").encode()).hexdigest()[:16]
+    if not state.get("report_topic"):
+        import secrets
+        state["report_topic"] = "rb-report-" + secrets.token_hex(8)
+    return state["report_topic"]
+
+
+def poll_reports(net, cfg, state, data_dir, now_utc, topic):
+    """新しい報告を受け取り、そのときの証拠（記録・航跡・経路・実行状況）と一緒に reports.json に残す"""
+    path = os.path.join(data_dir, "reports.json")
+    saved = load_json(path, [])
+    since = state.get("report_since") or "12h"
+    try:
+        text = net.reports(cfg["notify"]["server"], topic, since)
+    except Exception as e:  # noqa: BLE001
+        LOG.err("誤り報告の受信", e)
+        return saved
+    known = {r.get("id") for r in saved}
+    new = 0
+    for line in (text or "").splitlines():
+        try:
+            m = json.loads(line)
+        except ValueError:
+            continue
+        if m.get("event") != "message" or m.get("id") in known:
+            continue
+        state["report_since"] = m.get("id")
+        try:
+            body = json.loads(m.get("message") or "{}")
+        except ValueError:
+            body = {"text": (m.get("message") or "")[:300]}
+        if not isinstance(body, dict):
+            body = {"text": str(body)[:300]}
+        ev = body.get("ev") or {}
+        hexes = {x for x in (ev.get("hex"),) if x}
+        words = {x for x in (ev.get("fl"), ev.get("reg")) if x}
+        # 通知からの報告: キー「live|RJAA|日付|arr|CX87」や題名「成田に来ます: B-LJD」から便名・登録記号を取り出す
+        for k in (ev.get("key"), body.get("key")):
+            parts = (k or "").split("|")
+            if len(parts) >= 2 and parts[-2] in ("arr", "dep", "ret", "pattern", "emg"):
+                words.add(parts[-1])
+        if ": " in (body.get("title") or ""):
+            words.add(body["title"].split(": ", 1)[1].strip())
+        words = {w for w in words if len(w) >= 3}
+        mv = {k: v for k, v in state.get("mv", {}).items()
+              if v.get("hex") in hexes or any(w in (v.get("reg"), v.get("fl"), v.get("cs"), v.get("hex")) for w in words)}
+        hexes |= {h for h, tr in state.get("tracks", {}).items() if any(w in x[7:] for x in tr for w in words)}
+        hexes |= {v.get("hex") for v in mv.values() if v.get("hex")}
+        rec = {"id": m.get("id"), "at": dt.datetime.fromtimestamp(m.get("time") or now_utc.timestamp(),
+                                                                  dt.timezone.utc).isoformat(),
+               "report": body,
+               "evidence": {
+                   "mv": mv,
+                   "inbound": {k: v for k, v in state.get("inbound", {}).items() if v.get("hex") in hexes},
+                   "outbound": {k: v for k, v in state.get("outbound", {}).items() if v.get("hex") in hexes},
+                   "tracks": {h: state.get("tracks", {}).get(h) for h in hexes if state.get("tracks", {}).get(h)},
+                   "routes": {cs: state.get("routes", {}).get(cs) for cs in
+                              {x[7] for h in hexes for x in state.get("tracks", {}).get(h, []) if x[7]}},
+                   "runway_live": state.get("runway_live"),
+                   "errors": list(LOG.errors), "version": VERSION},
+               "status": "未確認"}
+        saved.append(rec)
+        known.add(rec["id"])
+        new += 1
+    if new:
+        LOG.note(f"誤り報告を{new}件受け取りました")
+    del saved[:-200]
+    save_json(path, saved, pretty=True)
+    return saved
 
 
 # --------------------------------------------------------------------------
@@ -2133,7 +2603,16 @@ def main():
     live, watched_air, area_by_ap = process_live(net, cfg, state, watch, now_utc, tz, tt, pa)
     state["_watched_air_regs"] = sorted({a["reg"] for a in watched_air if not a["ground"]})
     learn(state, cfg, watch, now_utc, tz, pa)
+    rtopic = report_topic(state)
+    reports = poll_reports(net, cfg, state, data_dir, now_utc, rtopic)
     plan = build_plan(cfg, state, watch, live, watched_air, tt, wx, now_utc, tz, pa)
+    plan["report"] = {"server": cfg["notify"]["server"], "topic": rtopic}
+    plan["reports"] = {"count": len(reports), "open": len([r for r in reports if r.get("status") == "未確認"]),
+                       "recent": [{"at": r["at"], "reason": r["report"].get("reason"),
+                                   "what": (r["report"].get("ev") or {}).get("reg") or (r["report"].get("ev") or {}).get("fl")
+                                   or r["report"].get("title")} for r in reports[-5:]][::-1]}
+    plan["emergencies"] = state.get("emergencies", [])
+    plan["descending"] = state.get("descending", [])
 
     repo = os.environ.get("GITHUB_REPOSITORY", "")
     site_url = f"https://{repo.split('/')[0]}.github.io/{repo.split('/')[1]}/" if "/" in repo else None
