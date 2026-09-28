@@ -1,9 +1,9 @@
-# レアバード・スコープ: 10分おきに撮影予報を更新して、site ブランチ（GitHub Pages）に公開する
+# レアバード・スコープ: 5分おきに撮影予報を更新して、site ブランチ（GitHub Pages）に公開する
 name: rarebird
 
 on:
   schedule:
-    - cron: "3-59/10 * * * *"   # 10分おき（GitHub側の混雑で数分遅れることがあります）
+    - cron: "*/5 * * * *"        # 5分おき（GitHubの最短間隔。混雑で数分〜十数分遅れることがあります）
   workflow_dispatch: {}          # 「Run workflow」ボタンで手動実行もできる
 
 permissions:
@@ -18,7 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 9
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: 前回の状態を読み込む
         run: |
