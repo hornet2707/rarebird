@@ -1717,7 +1717,10 @@ def process_live(net, cfg, state, watch, now_utc, tz, tt, pa=None):
             del tracks[h]
     for k in [k for k, v in inb.items() if nowts > v["eta"] + 1800]:
         del inb[k]
-    for k in [k for k, v in outb.items() if nowts > v["eta_dest"] + 36 * 3600]:
+    # 折り返し待ちの有効期限: 国内の空港に着いた機体は20時間（夜間駐機して翌朝飛ぶところまで）、
+    # 海外は36時間。その間にどこかを飛んでいるのを見れば、上の処理でその時点で消える
+    for k in [k for k, v in outb.items()
+              if nowts > v["eta_dest"] + (20 if (v.get("dest") or "")[:2] in ("RJ", "RO") else 36) * 3600]:
         del outb[k]
 
     # 6) 各空港: 滑走路判定と発着記録（45nm圏）
