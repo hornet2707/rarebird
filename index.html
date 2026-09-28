@@ -19,6 +19,8 @@
   --steel:#36699A;--steel-bg:#E3ECF5;--steel-soft:#9DB5C9;
   --cfg-n:#4F84B0;--cfg-s:#2F9A93;--cfg-s2:#C98A2B;--cfg-x:#A9B5BF;
   --good:#2E7D4F;--fair:#8A7A2E;--poor:#B23A28;
+  --k-emg:#D0211C;--k-emg-bg:#FDE3E1;--k-mil:#8E3FB5;--k-mil-bg:#F3E6FA;--k-fl:#1F63D8;--k-fl-bg:#E2ECFD;
+  --k-type:#D86F00;--k-type-bg:#FFEBD2;--k-op:#0F857B;--k-op-bg:#DDF3F0;--k-jp:#A3956A;--k-jp-bg:#F3F0E6;
   --shadow:0 1px 2px rgba(20,32,42,.07),0 6px 16px rgba(20,32,42,.05);
   --f-ui:"Zen Kaku Gothic New","Hiragino Kaku Gothic ProN","Yu Gothic","Noto Sans JP",system-ui,sans-serif;
   --f-data:"Roboto Mono",ui-monospace,"SFMono-Regular",Menlo,Consolas,monospace;
@@ -31,6 +33,8 @@
   --steel:#6FA4CE;--steel-bg:#1B2A38;--steel-soft:#3E566B;
   --cfg-n:#5E93BF;--cfg-s:#3FB0A8;--cfg-s2:#D9A043;--cfg-x:#4A5A68;
   --good:#5CC48A;--fair:#C9B458;--poor:#F07A62;
+  --k-emg:#FF5A4E;--k-emg-bg:#3A1614;--k-mil:#C08AF0;--k-mil-bg:#2A1C36;--k-fl:#6CA8FF;--k-fl-bg:#152640;
+  --k-type:#FFA23A;--k-type-bg:#35240F;--k-op:#3FC6BA;--k-op-bg:#10302D;--k-jp:#8C8263;--k-jp-bg:#262620;
   --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px rgba(0,0,0,.25);
 }}
 :root[data-theme="dark"]{
@@ -41,6 +45,8 @@
   --steel:#6FA4CE;--steel-bg:#1B2A38;--steel-soft:#3E566B;
   --cfg-n:#5E93BF;--cfg-s:#3FB0A8;--cfg-s2:#D9A043;--cfg-x:#4A5A68;
   --good:#5CC48A;--fair:#C9B458;--poor:#F07A62;
+  --k-emg:#FF5A4E;--k-emg-bg:#3A1614;--k-mil:#C08AF0;--k-mil-bg:#2A1C36;--k-fl:#6CA8FF;--k-fl-bg:#152640;
+  --k-type:#FFA23A;--k-type-bg:#35240F;--k-op:#3FC6BA;--k-op-bg:#10302D;--k-jp:#8C8263;--k-jp-bg:#262620;
   --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px rgba(0,0,0,.25);
 }
 *{box-sizing:border-box}
@@ -102,11 +108,24 @@ h2{font-size:15px;margin:0;letter-spacing:.04em;text-wrap:balance}
 /* events */
 .evs{display:flex;flex-direction:column;gap:9px}
 .ev{background:var(--panel);border:1px solid var(--line);border-left:4px solid var(--steel-soft);border-radius:6px;padding:11px 13px;box-shadow:var(--shadow);display:grid;grid-template-columns:62px 1fr;gap:2px 12px}
-.ev[data-cat="watch"]{border-left-color:var(--amber-solid)}
-.ev[data-cat="type"]{border-left-color:var(--amber-edge)}
-.ev[data-cat="mil"]{border-left-color:var(--verm)}
-.ev[data-cat="op"]{border-left-color:var(--teal)}
-.ev[data-cat="emg"]{border-left-color:var(--verm);border-left-width:6px}
+/* 種別: 珍しいもの（緊急・政府軍用・海外の特別塗装・希少機種）ほど目立たせ、日本の特別塗装は控えめに */
+.ev[data-k]{--k:var(--steel-soft);--kbg:var(--panel);border-left-color:var(--k)}
+.ev[data-k="emg"]{--k:var(--k-emg);--kbg:var(--k-emg-bg)}
+.ev[data-k="mil"]{--k:var(--k-mil);--kbg:var(--k-mil-bg)}
+.ev[data-k="fl"]{--k:var(--k-fl);--kbg:var(--k-fl-bg)}
+.ev[data-k="type"]{--k:var(--k-type);--kbg:var(--k-type-bg)}
+.ev[data-k="op"]{--k:var(--k-op);--kbg:var(--k-op-bg)}
+.ev[data-k="jp"]{--k:var(--k-jp);--kbg:var(--k-jp-bg)}
+.ev[data-tier="1"]{border-left-width:7px;background:linear-gradient(90deg,var(--kbg),var(--panel) 70%);border-color:color-mix(in srgb,var(--k) 45%,var(--line));border-left-color:var(--k)}
+.ev[data-tier="2"]{border-left-width:5px}
+.ev[data-tier="3"]{border-left-width:3px}
+.ev[data-tier="3"] .ev-name{font-weight:500}
+.kchip{font-size:11px;font-weight:700;border-radius:3px;padding:0 6px;white-space:nowrap;color:var(--k);border:1px solid var(--k)}
+.ev[data-tier="1"] .kchip{background:var(--k);color:var(--panel);border-color:var(--k)}
+.ev[data-tier="3"] .kchip{font-weight:500;opacity:.85}
+.k-leg{display:flex;flex-wrap:wrap;gap:6px 12px;font-size:11.5px;color:var(--muted);margin:0 0 10px}
+.k-leg i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:4px;vertical-align:-1px}
+
 .rep{border:1px solid var(--line);background:transparent;color:var(--muted);border-radius:4px;padding:1px 8px;font-size:11.5px;cursor:pointer;font-family:inherit}
 .rep.done{border-color:var(--verm-edge);color:var(--verm);cursor:default}
 .rep-box{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;align-items:center;font-size:12px;color:var(--muted)}
@@ -126,7 +145,9 @@ h2{font-size:15px;margin:0;letter-spacing:.04em;text-wrap:balance}
 .ev:not(.open) .ev-line1 .actype{display:none}
 .ev .dirs{font-size:11px;font-weight:700;color:var(--muted);margin-left:2px}
 .ev.open .dirs{display:none}
-.chev{color:var(--muted);font-size:12px;width:14px;text-align:center;transition:transform .15s}
+.ev{position:relative}
+.ev .ev-main{padding-right:14px}
+.chev{position:absolute;right:8px;top:9px;color:var(--muted);font-size:12px;width:14px;text-align:center;transition:transform .15s}
 .ev.open .chev{transform:rotate(180deg)}
 .st{font-size:11px;font-weight:700;border-radius:3px;padding:0 5px;border:1px solid var(--steel-soft);color:var(--steel);white-space:nowrap}
 .st.go{border-color:var(--verm-edge);color:var(--verm)}
@@ -226,7 +247,15 @@ details.past-box summary{cursor:pointer;font-size:12.5px;color:var(--muted);padd
   <section>
     <div class="sec-head"><div><div class="eyebrow">Schedule</div><h2 id="ev-title">注目の発着</h2></div>
       <span class="ev-tools"><button type="button" id="ev-open-all">すべて展開</button><button type="button" id="ev-close-all">すべて収納</button></span></div>
-    <p class="sec-note" id="ev-note" style="margin:-4px 0 8px">便をタップすると詳しい情報を開閉できます</p>
+    <p class="sec-note" id="ev-note" style="margin:-4px 0 6px">便をタップすると詳しい情報を開閉できます</p>
+    <div class="k-leg" aria-label="種別の色">
+      <span><i style="background:var(--k-emg)"></i>緊急信号</span>
+      <span><i style="background:var(--k-mil)"></i>政府・軍用</span>
+      <span><i style="background:var(--k-fl)"></i>海外の特別塗装</span>
+      <span><i style="background:var(--k-type)"></i>希少機種・珍しい機体</span>
+      <span><i style="background:var(--k-op)"></i>珍しい運航者</span>
+      <span><i style="background:var(--k-jp)"></i>日本の特別塗装（控えめ表示）</span>
+    </div>
     <div class="evs" id="evs"></div>
     <details class="past-box" id="past-box" hidden><summary id="past-sum"></summary><div class="evs" id="evs-past" style="margin-top:8px"></div></details>
   </section>
@@ -237,7 +266,7 @@ details.past-box summary{cursor:pointer;font-size:12.5px;color:var(--muted);padd
     <div class="now">
       <div class="box" id="now-box"></div>
       <div id="map" role="img" aria-label="周辺の航空機の位置"></div>
-      <div class="tl-leg"><span><i style="background:var(--amber-solid)"></i>特別塗装機・希少機種</span><span><i style="background:var(--verm)"></i>軍用・政府</span><span><i style="background:var(--teal)"></i>珍しい運航者</span><span><i style="background:var(--steel-soft)"></i>その他</span></div>
+      <div class="tl-leg"><span><i style="background:var(--k-emg)"></i>緊急</span><span><i style="background:var(--k-mil)"></i>政府・軍用</span><span><i style="background:var(--k-fl)"></i>海外特別塗装</span><span><i style="background:var(--k-type)"></i>希少機種</span><span><i style="background:var(--k-op)"></i>珍しい運航者</span><span><i style="background:var(--k-jp)"></i>日本特別塗装</span><span><i style="background:var(--steel-soft)"></i>その他</span></div>
     </div>
   </section>
 
@@ -285,6 +314,11 @@ var PLAN=null,LIVE=null,S={ap:null,day:null,hour:null,open:{},openAll:false};
 var WD="日月火水木金土";
 var CONF_CLS={"確定":"c1","有力":"c2","傾向":"c3"};
 var CAT_LABEL={watch:"特別塗装機",type:"希少機種",mil:"軍用・政府",op:"珍しい運航者",emg:"緊急信号"};
+var KIND={emg:["緊急信号",1],mil:["政府・軍用",1],fl:["海外の特別塗装",1],type:["希少機種",1],op:["珍しい運航者",2],jp:["日本の特別塗装",3]};
+function kindOf(cat,reg){
+  if(cat==="watch"){reg=(reg||"").toUpperCase();if(/^\d{2}-\d{4}$/.test(reg))return "mil";return /^JA/.test(reg)?"jp":"fl"}
+  return KIND[cat]?cat:"";
+}
 var REP_REASONS=["来なかった","空港が違う","時刻が大きく違う","機体・種類が違う","その他"];
 var SHOOT={good:["◎","sh-good","撮影日和"],fair:["○","sh-fair","まずまず"],poor:["△","sh-poor","雨・視界不良の恐れ"],"?":["－","","予報なし"]};
 
@@ -413,6 +447,7 @@ function cardKey(e,ap){return ap.icao+"|"+S.day+"|"+e.key}
 function isOpen(e,ap){var k=cardKey(e,ap);return (k in S.open)?S.open[k]:S.openAll}
 function evCard(e,ap){
   var c=el("article","ev"+(e.past?" past":"")+(isOpen(e,ap)?" open":""));c.setAttribute("data-cat",e.cat);c.setAttribute("data-conf",e.conf);
+  var k=kindOf(e.cat,e.reg);if(k){c.setAttribute("data-k",k);c.setAttribute("data-tier",String(KIND[k][1]))}
   c.tabIndex=0;c.setAttribute("aria-expanded",String(isOpen(e,ap)));
   var t=el("div","ev-time");
   if(e.time){t.textContent=(e.approx?"~":"")+e.time;if(e.sched&&e.sched!==e.time)t.appendChild(el("small",null,"定刻 "+e.sched))}
@@ -424,6 +459,7 @@ function evCard(e,ap){
   l1.appendChild(el("span","reg",e.reg||e.fl||"－"));
   l1.appendChild(el("span","dirs",dirTxt));
   if(e.type&&e.type!=="----")l1.appendChild(el("span","actype",e.type));
+  if(k)l1.appendChild(el("span","kchip",KIND[k][0]));
   if(e.status==="飛行中"||e.status==="出発準備中"||e.status==="着陸見込み")l1.appendChild(el("span","st"+(e.status==="出発準備中"?" go":""),e.status));
   l1.appendChild(el("span","pill "+CONF_CLS[e.conf],e.conf));
   l1.appendChild(el("span","chev","▾"));
@@ -535,15 +571,16 @@ function renderMap(ap){
   } else MAP.setView([ap.lat,ap.lon],MAP.getZoom());
   LAYER.clearLayers();
   var ac=(LIVE&&LIVE.aircraft)||[];
-  var col={watch:"var(--amber-solid)",type:"var(--amber-solid)",mil:"var(--verm)",op:"var(--teal)",emg:"var(--verm)"};
+  var SIZE={1:20,2:15,3:13};
   ac.forEach(function(a){
     if(a.g)return;
-    var c=col[a.s]||"var(--steel-soft)",big=!!a.s;
-    var sz=big?18:10;
+    var k=kindOf(a.s,a.r),big=!!k;
+    var c=k?"var(--k-"+k+")":"var(--steel-soft)";
+    var sz=k?(k==="emg"?24:SIZE[KIND[k][1]]):10;
     var html='<svg width="'+sz+'" height="'+sz+'" viewBox="-6 -6 12 12" style="transform:rotate('+(a.tr||0)+'deg);overflow:visible"><path d="M0,-5.5 L4,4.5 L0,2.2 L-4,4.5 Z" fill="'+c+'" stroke="rgba(0,0,0,.35)" stroke-width=".6"/></svg>';
-    if(big)html+='<span class="plane-lbl" style="position:absolute;left:'+(sz+2)+'px;top:-2px">'+(a.r||a.c||"").replace(/[<>&"]/g,"")+"</span>";
+    if(big)html+='<span class="plane-lbl" style="position:absolute;left:'+(sz+2)+'px;top:-2px;color:'+c+'">'+(a.r||a.c||"").replace(/[<>&"]/g,"")+"</span>";
     var ic=L.divIcon({html:html,className:"",iconSize:[sz,sz],iconAnchor:[sz/2,sz/2]});
-    var mk=L.marker([a.la,a.lo],{icon:ic,zIndexOffset:big?1000:0}).addTo(LAYER);
+    var mk=L.marker([a.la,a.lo],{icon:ic,zIndexOffset:k?(4-KIND[k][1])*1000:0}).addTo(LAYER);
     var tip=[(a.c||"")+" "+(a.r||""),(a.t||"")+(a.al!=null?"　"+a.al+"ft":""),a.w||""].filter(Boolean).join("<br>").replace(/[<>&"](?!br>)/g,"");
     mk.bindPopup(tip+(a.h?'<br><a href="https://globe.adsb.lol/?icao='+a.h+'" target="_blank" rel="noopener">地図で追う</a>':""));
   });
