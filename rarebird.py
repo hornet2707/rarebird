@@ -36,7 +36,7 @@ import urllib.error
 import urllib.request
 from zoneinfo import ZoneInfo
 
-VERSION = "2.2.0"
+VERSION = "2.3.0"
 
 # --------------------------------------------------------------------------
 # 既定設定（config.json で上書きできる）
@@ -334,10 +334,10 @@ class Net:
         return self.get_text(f"{server.rstrip('/')}/{topic}/json?poll=1&since={since}", timeout=20)
 
     def hexes(self, hexes):
-        """機体番号（24bit）で世界中から。カンマ区切りで90機ずつ"""
+        """機体番号（24bit）で世界中から。カンマ区切りで30機ずつ（長すぎると 403 になる）"""
         out = []
-        for i in range(0, len(hexes), 90):
-            out.extend(self.adsb("/hex/" + ",".join(hexes[i:i + 90])))
+        for i in range(0, len(hexes), 30):
+            out.extend(self.adsb("/hex/" + ",".join(hexes[i:i + 30])))
         return out
 
     def routeset(self, planes):
@@ -1441,6 +1441,83 @@ def airport_latlon(icao, state):
 
 
 NOTABLE = ("watch", "type", "mil", "emg")
+SHIP_DAYS = 28
+
+
+def learn_leg(state, a, nowts, tz):
+    """機材繰り（シップパターン）の学習。同じ機体が続けて飛んだ便を「便A→便B」として数える。
+    あわせて「ある航空会社の機体が空港Xに着いた後、次にどこへ飛んだか」も数える"""
+    fl = a.get("fl") or a.get("cs")
+    if not fl or not re.match(r"^[A-Z]{3}\d", a.get("cs") or ""):
+        return
+    ship = state.setdefault("ship", {"last": {}, "fl": {}, "flout": {}, "nd": {}})
+    date = dt.datetime.fromtimestamp(nowts, tz).date().isoformat()
+    route = a.get("route") or []
+    orig, dest = (route[0], route[-1]) if len(route) >= 2 else (None, None)
+    last = ship["last"].get(a["hex"])
+    if last and last["fl"] == fl and nowts - last["t"] < 20 * 3600:
+        last["t"] = nowts
+        if dest and not last.get("dest"):
+            last["orig"], last["dest"] = orig, dest
+        return
+    if last and nowts - last["t"] < 20 * 3600:
+        # 前の便の到着地から今の便が出ている（途中の便を見落としていない）ときだけ数える
+        if orig is None or last.get("dest") is None or orig == last["dest"]:
+            _add_date(ship["fl"].setdefault(f"{last['fl']}>{fl}", []), date)
+            _add_date(ship["flout"].setdefault(last["fl"], []), date)
+        if last.get("dest") and dest and orig == last["dest"]:
+            nd = ship["nd"].setdefault(f"{a['cs'][:3]}|{last['dest']}", {})
+            _add_date(nd.setdefault(dest, []), date + "|" + a["hex"])
+    ship["last"][a["hex"]] = {"fl": fl, "t": nowts, "orig": orig, "dest": dest}
+
+
+def _add_date(lst, d):
+    if d not in lst:
+        lst.append(d)
+        del lst[:-12]
+
+
+def prune_ship(state, today):
+    ship = state.get("ship")
+    if not ship:
+        return
+    cut = (today - dt.timedelta(days=SHIP_DAYS)).isoformat()
+    for tbl in (ship["fl"], ship["flout"]):
+        for k in list(tbl):
+            tbl[k] = [d for d in tbl[k] if d[:10] >= cut]
+            if not tbl[k]:
+                del tbl[k]
+    for k in list(ship["nd"]):
+        for d in list(ship["nd"][k]):
+            ship["nd"][k][d] = [x for x in ship["nd"][k][d] if x[:10] >= cut]
+            if not ship["nd"][k][d]:
+                del ship["nd"][k][d]
+        if not ship["nd"][k]:
+            del ship["nd"][k]
+    for h in [h for h, v in ship["last"].items() if v["t"] < (dt.datetime.combine(today, dt.time()) - dt.timedelta(days=3)).timestamp()]:
+        del ship["last"][h]
+
+
+def ship_next(ship, fl):
+    """便flの次に同じ機体が入る便の候補 [(便, 回数, 全体)]（多い順）"""
+    total = len((ship or {}).get("flout", {}).get(fl, []))
+    if not total:
+        return [], 0
+    out = []
+    pre = fl + ">"
+    for k, v in ship.get("fl", {}).items():
+        if k.startswith(pre):
+            out.append((k[len(pre):], len(v)))
+    out.sort(key=lambda x: -x[1])
+    return out, total
+
+
+def next_dest_share(ship, airline, x, ic):
+    """航空会社 airline の機体が空港 x に着いた後、次に ic へ飛んだ割合（回数, 全体）"""
+    nd = (ship or {}).get("nd", {}).get(f"{airline}|{x}") or {}
+    total = sum(len(v) for v in nd.values())
+    n = sum(len(v) for d, v in nd.items() if d == ic)
+    return n, total
 
 
 def process_live(net, cfg, state, watch, now_utc, tz, tt, pa=None):
@@ -1571,10 +1648,23 @@ def process_live(net, cfg, state, watch, now_utc, tz, tt, pa=None):
     # 以前の版で機首の向きから推定した到着予定は使わない
     for k in [k for k, v in inb.items() if v.get("geo")]:
         del inb[k]
+    # 以前の版では1機に古い便の折り返し待ちが何件も残っていた → 最新の1件だけにする
+    latest = {}
+    for k, v in outb.items():
+        if v.get("hex") and (v["hex"] not in latest or v["eta_dest"] > outb[latest[v["hex"]]]["eta_dest"]):
+            latest[v["hex"]] = k
+    for k in [k for k, v in outb.items() if latest.get(v.get("hex")) != k]:
+        del outb[k]
     for a in seen.values():
         if a["ground"] or a["sev"] not in NOTABLE or not a["gs"]:
             continue
         key = f"{a['hex']}|{a['cs'] or '-'}"
+        # 別の便名で飛んでいる＝前の便は終わった。前の便の到着予定・折り返し待ちは捨てる
+        if a["cs"]:
+            for d_ in (inb, outb):
+                for k in [k for k, v in d_.items() if v.get("hex") == a["hex"] and v.get("cs") != a["cs"]]:
+                    del d_[k]
+        learn_leg(state, a, nowts, tz)
         base = {"hex": a["hex"], "reg": a["reg"], "type": a["type"], "cs": a["cs"], "fl": a["fl"],
                 "sev": a["sev"], "why": a["why"], "updated": nowts}
         route = a.get("route")
@@ -1588,7 +1678,8 @@ def process_live(net, cfg, state, watch, now_utc, tz, tt, pa=None):
             if dest in aps:
                 inb[key] = dict(base, dest=dest, orig=orig, eta=eta, dist=round(dist), geo=False,
                                 first=inb.get(key, {}).get("first", nowts))
-            elif orig in aps:
+            else:
+                # 撮影拠点以外へ向かっている（羽田・成田発に限らない）: そこから戻ってくる便を予測する
                 outb[key] = dict(base, orig=orig, dest=dest, eta_dest=eta)
         elif a["alt"] is not None and a["alt"] < 25000 and (a["vr"] or 0) < -300:
             # 経路不明: 空港付近では進入経路に沿って大きく曲がるため、機首の向きでは行き先を決めない。
@@ -1897,6 +1988,7 @@ def learn(state, cfg, watch, now_utc, tz, pa=None):
         rare[k] = [x for x in rare[k] if x["date"] >= cutoff]
         if not rare[k]:
             del rare[k]
+    prune_ship(state, dt.datetime.fromtimestamp(now_utc.timestamp(), tz).date())
     pas = state.get("pa_seen", {})
     for h in list(pas):
         pas[h] = [d for d in pas[h] if d >= cutoff]
@@ -2071,9 +2163,9 @@ def events_for(ic, day, cfg, state, watch, live, watched_air, tt, ttx, now_utc, 
              "other": (tt_row or {}).get("ap") or ap_label(r.get("orig")), "otherCode": r.get("orig"),
              "reason": reason, "past": False, "leftH": round(left, 1)})
     for k, r in state.get("outbound", {}).items():
-        if r["orig"] != ic:
+        if r["dest"] == ic:
             continue
-        ret = predict_return(ic, r, tt, tz, day)
+        ret = predict_return(ic, r, tt, tz, day, state, nowts)
         if ret:
             put(ret | {"reg": r.get("reg"), "hex": r["hex"], "type": r.get("type"),
                        "name": watch.get(r.get("reg"), {}).get("name") or r.get("why"), "cat": r["sev"]})
@@ -2205,13 +2297,35 @@ def events_for(ic, day, cfg, state, watch, live, watched_air, tt, ttx, now_utc, 
     return out
 
 
-def predict_return(ic, r, tt, tz, day):
-    """ic を出て dest へ飛行中の注目機。dest から ic へ戻る便を、今日・明日の時刻表から探す。
-    長距離線（2500nm超）は折り返し2時間半、短距離は40分で見積もる"""
+def _tt_arrival(tt, ic, fl, after, tz):
+    """時刻表で ic に着く便 fl の、after 以降で最初の到着 (時刻, 行)"""
+    best = None
+    for d_iso2, rows in (tt.get(ic) or {}).items():
+        if d_iso2.startswith("_"):
+            continue
+        d2 = dt.date.fromisoformat(d_iso2)
+        for row in rows:
+            if row["dir"] != "arr" or row["fl"] != fl:
+                continue
+            m = _hhmm_to_min(row.get("rev") or row["time"])
+            if m is None:
+                continue
+            tm = dt.datetime.combine(d2, dt.time(m // 60, m % 60), tz)
+            if tm >= after - dt.timedelta(minutes=10) and (best is None or tm < best[0]):
+                best = (tm, row)
+    return best
+
+
+def predict_return(ic, r, tt, tz, day, state=None, nowts=None):
+    """撮影拠点以外へ向かっている注目機が、ic に戻ってくる便を予測する。
+    1) 機材繰りの学習（同じ機体が続けて乗った便の記録）をたどり、ic 着の便に行き着けばそれを採用
+    2) 行き先から ic への最初の便（時刻表）。「その空港に着いた後、次に ic へ飛んだ割合」で確度を決める
+    3) 時刻表の無い空港は概算（この空港から出て行った機体だけ）"""
     dest = r["dest"]
     g_d, g_h = iata_geo(dest), AIRPORT_INFO.get(ic)
     if not g_d or not g_h:
         return None
+    ship = (state or {}).get("ship") or {}
     dist = nm_between(g_d[1], g_d[2], g_h["lat"], g_h["lon"])
     long_haul = dist > 2500
     block = dist / (470 if long_haul else 430) * 60 + (30 if long_haul else 25)
@@ -2222,7 +2336,37 @@ def predict_return(ic, r, tt, tz, day):
     names = [ja for ja, i in GEO["ja2iata"].items() if i == dest_iata]
     prefix = (r.get("fl") or "")[:2]
     days_tt = tt.get(ic) or {}
-    where = f"{ap_label(dest)}へ飛行中（{arr_dest.strftime('%m/%d %H:%M').lstrip('0')}着見込み）"
+    night = arr_dest.hour >= 19 or arr_dest.hour < 5
+    where = (f"{arr_dest.strftime('%m/%d %H:%M').lstrip('0')}に{ap_label(dest)}着"
+             + ("（夜間駐機）" if night and not long_haul else "") if arr_dest.timestamp() < (nowts or dt.datetime.now(tz).timestamp())
+             else f"いま{ap_label(dest)}へ飛行中（{arr_dest.strftime('%m/%d %H:%M').lstrip('0')}着見込み）")
+    ic_name = AIRPORT_INFO.get(ic, {}).get("name", ic)
+
+    # 1) 機材繰りの学習をたどる（最大6便先まで）
+    cur, prob, path, seen_ = r.get("fl"), 1.0, [], set()
+    after = arr_dest + dt.timedelta(minutes=turn)
+    for _ in range(6):
+        if not cur or cur in seen_:
+            break
+        seen_.add(cur)
+        cands_, total = ship_next(ship, cur)
+        if not cands_ or cands_[0][1] < 2 or cands_[0][1] / total < 0.6:
+            break
+        nxt, n = cands_[0]
+        prob *= n / total
+        path.append(f"{nxt}（{total}回中{n}回）")
+        hit = _tt_arrival(tt, ic, nxt, after, tz)
+        if hit:
+            tm, row = hit
+            if tm.date() != day:
+                return None
+            return {"key": f"arr|{row['fl']}", "dir": "arr", "time": row["rev"] or row["time"], "sched": row["time"],
+                    "fl": row["fl"], "conf": "有力" if prob >= 0.5 else "傾向", "status": row.get("status", ""),
+                    "other": row["ap"], "otherCode": row_code(row), "past": False, "prob": round(prob, 2),
+                    "reason": f"{where}。機材繰りの学習: {r.get('fl')} の後は " + " → ".join(path)}
+        cur = nxt
+
+    # 2) 行き先から ic への最初の便（時刻表）
     cands = []
     if prefix and (names or dest_iata):
         for d_iso2, rows in days_tt.items():
@@ -2236,25 +2380,37 @@ def predict_return(ic, r, tt, tz, day):
                 m = _hhmm_to_min(row["time"])
                 if m is None:
                     continue
-                t = dt.datetime.combine(d2, dt.time(m // 60, m % 60), tz)
-                if earliest - dt.timedelta(minutes=10) <= t <= earliest + dt.timedelta(hours=30):
-                    cands.append((t, row))
+                tm = dt.datetime.combine(d2, dt.time(m // 60, m % 60), tz)
+                if earliest - dt.timedelta(minutes=10) <= tm <= earliest + dt.timedelta(hours=30):
+                    cands.append((tm, row))
     cands.sort(key=lambda x: x[0])
     if cands:
-        t, row = cands[0]
-        if t.date() != day:
+        tm, row = cands[0]
+        if tm.date() != day:
             return None
         alt = f"、次点 {cands[1][1]['fl']} {cands[1][0].strftime('%m/%d %H:%M').lstrip('0')}" if len(cands) > 1 else ""
+        n, total = next_dest_share(ship, (r.get("cs") or "")[:3], dest, ic)
+        if long_haul:
+            conf, stat = "有力", ""
+        elif total >= 4 and n / total >= 0.7:
+            conf, stat = "有力", f"。{ap_label(dest)}に着いた後、次に{ic_name}へ飛んだのは{total}回中{n}回"
+        else:
+            conf = "傾向"
+            stat = (f"。{ap_label(dest)}に着いた後、次に{ic_name}へ飛んだのは{total}回中{n}回" if total
+                    else "。別の空港へ向かうこともあります（機材繰りを学習中）")
+        head = "翌朝の最初の便" if night and not long_haul and tm.date() > arr_dest.date() else "折り返しの最短便"
         return {"key": f"arr|{row['fl']}", "dir": "arr", "time": row["rev"] or row["time"], "sched": row["time"],
-                "fl": row["fl"], "conf": "有力", "status": row.get("status", ""), "other": row["ap"],
+                "fl": row["fl"], "conf": conf, "status": row.get("status", ""), "other": row["ap"],
                 "otherCode": dest_iata, "past": False,
-                "reason": f"いま{where}。折り返しの最短便{alt}"}
-    # 時刻表がある空港で該当便が無い＝この2日間には戻らないとみなす
-    if days_tt or earliest.date() != day:
+                "reason": f"{where}。{ap_label(dest)}から{ic_name}への{head}{alt}{stat}"}
+    # 3) 時刻表にその航空会社の便が無い空港（成田の貨物便など）: この空港から出て行った機体だけ概算
+    has_airline = prefix and any(row["fl"].startswith(prefix) for d_, rows in days_tt.items()
+                                 if not d_.startswith("_") for row in rows)
+    if has_airline or earliest.date() != day or r.get("orig") != ic:
         return None
     return {"key": f"ret|{r['hex']}", "dir": "arr", "time": earliest.strftime("%H:%M"), "approx": True,
             "fl": None, "conf": "傾向", "status": "", "other": ap_label(dest), "otherCode": dest_iata, "past": False,
-            "reason": f"いま{where}。折り返すならこの頃以降"}
+            "reason": f"{where}。折り返すならこの頃以降"}
 
 
 def _clusters(w, thr_min):
