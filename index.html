@@ -6,6 +6,7 @@
 <title>レアバード・スコープ</title>
 <meta name="description" content="羽田・成田に今日明日来る特別塗装機・レア機材の撮影予報">
 <meta name="theme-color" content="#101820">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='5' fill='%23101820'/%3E%3Ccircle cx='12' cy='12' r='7.6' fill='none' stroke='%23DFE8EF' stroke-width='1.5'/%3E%3Cpath transform='rotate(45 12 12)' fill='%23F2A71B' d='M12 5.6c.5 0 .75.5.75 1.1v3.2l4.3 2.55v1.25l-4.3-1.35v2.6l1.35 1v1L12 16.3l-2.1.5v-1l1.35-1v-2.6l-4.3 1.35v-1.25l4.3-2.55V6.7c0-.6.25-1.1.75-1.1z'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Zen+Kaku+Gothic+New:wght@400;500;700;900&family=Roboto+Mono:wght@400;500;700&display=swap">
@@ -61,9 +62,13 @@ button{font-family:inherit}
 /* header */
 .hdr{position:sticky;top:0;z-index:30;background:color-mix(in srgb,var(--ground) 92%,transparent);backdrop-filter:blur(10px);border-bottom:1px solid var(--line);padding-top:env(safe-area-inset-top,0px)}
 .hdr-in{max-width:760px;margin:0 auto;padding:10px 16px 10px;display:grid;gap:8px}
-.hdr-top{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
-.mark{font-weight:900;font-size:18px;letter-spacing:.06em;margin:0}
-.mark b{color:var(--amber-solid);font-weight:900}
+.hdr-top{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.mark{display:flex;align-items:center;gap:7px;margin:0;line-height:1;font-family:var(--f-data);font-size:15px;color:var(--ink)}
+.mark .mk{width:22px;height:22px;flex:none;color:var(--ink)}
+.mark .mk-p{fill:var(--amber-solid)}
+.mark .wm{font-weight:700;letter-spacing:.2em}
+.mark .wm b{font-weight:700;color:var(--amber-solid)}
+.mark .wm-sub{font-weight:400;font-size:11px;letter-spacing:.32em;color:var(--muted);padding-left:8px;border-left:1px solid var(--line)}
 .upd{margin-left:auto;font-family:var(--f-data);font-size:11px;color:var(--muted)}
 .seg{display:flex;gap:6px;flex-wrap:wrap}
 .seg button{border:1px solid var(--line);background:var(--panel);color:var(--ink);border-radius:999px;padding:5px 13px;font-size:13px;font-weight:700;cursor:pointer}
@@ -120,9 +125,10 @@ h2{font-size:15px;margin:0;letter-spacing:.04em;text-wrap:balance}
 .ev[data-tier="2"]{border-left-width:5px}
 .ev[data-tier="3"]{border-left-width:3px}
 .ev[data-tier="3"] .ev-name{font-weight:500}
-.kchip{font-size:11px;font-weight:700;border-radius:3px;padding:0 6px;white-space:nowrap;color:var(--k);border:1px solid var(--k)}
-.ev[data-tier="1"] .kchip{background:var(--k);color:var(--panel);border-color:var(--k)}
-.ev[data-tier="3"] .kchip{font-weight:500;opacity:.85}
+.ev:not(.open) .pill{font-size:10.5px;padding:0 6px}
+.ev:not(.open) .st{font-size:10.5px}
+.ev:not(.open) .ev-line1{flex-wrap:nowrap;min-width:0}
+.ev:not(.open) .reg{white-space:nowrap}
 .k-leg{display:flex;flex-wrap:wrap;gap:6px 12px;font-size:11.5px;color:var(--muted);margin:0 0 10px}
 .k-leg i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:4px;vertical-align:-1px}
 
@@ -210,7 +216,7 @@ details.past-box summary{cursor:pointer;font-size:12.5px;color:var(--muted);padd
 <header class="hdr">
   <div class="hdr-in">
     <div class="hdr-top">
-      <h1 class="mark">レアバード<b>・</b>スコープ</h1>
+      <h1 class="mark" aria-label="レアバード・スコープ" title="レアバード・スコープ"><svg class="mk" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9.2" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M12 .8v3.4M12 19.8v3.4M.8 12h3.4M19.8 12h3.4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path class="mk-p" transform="rotate(45 12 12)" d="M12 4.6c.55 0 .85.55.85 1.25v3.7l5 2.95v1.45l-5-1.55v3l1.55 1.15v1.15L12 17.1l-2.4.6v-1.15l1.55-1.15v-3l-5 1.55v-1.45l5-2.95v-3.7c0-.7.3-1.25.85-1.25z"/></svg><span class="wm">RARE<b>BIRD</b></span><span class="wm-sub">SCOPE</span></h1>
       <span class="upd" id="upd">読み込み中…</span>
     </div>
     <div class="seg" id="segs" role="group" aria-label="空港と日付"></div>
@@ -459,7 +465,6 @@ function evCard(e,ap){
   l1.appendChild(el("span","reg",e.reg||e.fl||"－"));
   l1.appendChild(el("span","dirs",dirTxt));
   if(e.type&&e.type!=="----")l1.appendChild(el("span","actype",e.type));
-  if(k)l1.appendChild(el("span","kchip",KIND[k][0]));
   if(e.status==="飛行中"||e.status==="出発準備中"||e.status==="着陸見込み")l1.appendChild(el("span","st"+(e.status==="出発準備中"?" go":""),e.status));
   l1.appendChild(el("span","pill "+CONF_CLS[e.conf],e.conf));
   l1.appendChild(el("span","chev","▾"));
