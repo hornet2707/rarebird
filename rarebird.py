@@ -36,7 +36,7 @@ import urllib.error
 import urllib.request
 from zoneinfo import ZoneInfo
 
-VERSION = "2.3.0"
+VERSION = "2.5.0"
 
 # --------------------------------------------------------------------------
 # 既定設定（config.json で上書きできる）
@@ -47,6 +47,16 @@ DEFAULT_CONFIG = {
     "scan_radius_nm": 45,       # 発着の記録・滑走路の判定に使う範囲
     "wide_radius_nm": 150,      # 希少機種・軍用機の接近に気づく範囲
     "global_type_minutes": 30,  # 希少機種を世界中から型式で探す間隔
+    # 国内線にはまず入らない機材（国内線を飛んでいたら注目機にする）。国際線ではふつうの機材なので国内線に限る
+    "domestic_unusual_types": ["B77W", "A35K", "A388", "B744", "B748", "B77L", "B77F", "A333", "A332",
+                               "A339", "B764", "B753", "B752"],
+    # その空港にはふつう来ない機材（その空港に発着する便なら注目機にする）
+    "airport_unusual_types": {
+        "RJTT": ["DH8D", "DH8A", "DH8B", "DH8C", "AT43", "AT45", "AT46", "AT72", "AT75", "AT76", "SF34", "D228",
+                 "E170", "E75S", "E75L", "E190", "CRJ2", "CRJ7", "CRJ9"],
+        "RJAA": ["DH8A", "DH8B", "DH8C", "AT43", "AT45", "AT46", "AT72", "AT75", "AT76", "SF34", "D228"],
+    },
+    "domestic_unusual_minutes": 10,  # 上の機材を国内で探す間隔（分）
     "history_days": 14,
     "rare_types": [
         "A388", "B741", "B742", "B743", "B744", "B748", "B74F", "B74R", "B74S", "BLCF",
@@ -1441,6 +1451,80 @@ def airport_latlon(icao, state):
 
 
 NOTABLE = ("watch", "type", "mil", "emg")
+
+
+def in_japan(lat, lon):
+    return 20 <= lat <= 46.5 and 122 <= lon <= 154
+
+
+def domestic_candidate_types(cfg):
+    s = {str(x).upper() for x in (cfg.get("domestic_unusual_types") or [])}
+    for lst in (cfg.get("airport_unusual_types") or {}).values():
+        s |= {str(x).upper() for x in lst or []}
+    return s
+
+
+def jp_airport(code):
+    return bool(code) and code[:2] in ("RJ", "RO")
+
+
+def domestic_unusual(a, cfg, aps):
+    """国内線（両端が日本の空港）で撮影拠点に発着する便に、ふつう入らない機材が入っていれば説明文を返す"""
+    route = a.get("route") or []
+    if len(route) < 2 or not a.get("type"):
+        return None
+    orig, dest = route[0], route[-1]
+    touch = [ic for ic in aps if ic in (orig, dest)]
+    if not touch:
+        return None
+    t = a["type"]
+    if jp_airport(orig) and jp_airport(dest) and t in {x.upper() for x in cfg.get("domestic_unusual_types") or []}:
+        return f"国内線では珍しい機材 {t}"
+    for ic in touch:
+        if t in {x.upper() for x in (cfg.get("airport_unusual_types") or {}).get(ic, [])}:
+            return f"{AIRPORT_INFO.get(ic, {}).get('name', ic)}には珍しい機材 {t}"
+    return None
+# 違いが小さく、撮影上は同じ扱いでよい型式のまとまり（787-8/-9/-10、737NG/MAX、A320/321/319 の ceo/neo）
+TYPE_FAMILY = [{"B788", "B789", "B78X"}, {"B737", "B738", "B739", "B38M", "B39M"},
+               {"A320", "A20N"}, {"A321", "A21N"}, {"A319", "A19N"}]
+
+
+def same_family(a, b):
+    return a == b or any(a in f and b in f for f in TYPE_FAMILY)
+
+
+def unusual_equipment(a, aps, ttx, equip, today):
+    """時刻表で撮影拠点に発着する国際線に、過去の実績に無い型式が入っていれば説明文を返す。
+    実績が3回以上・2日以上あるときだけ判定する（学習が浅いうちは言わない）"""
+    for ic in aps:
+        for d in ("arr", "dep"):
+            row = ttx.get((ic, today, d, a["fl"]))
+            if not row or row.get("region") == "dom":
+                continue  # 国内線は機種の一覧（domestic_unusual_types など）だけで判定する
+            hist = equip.get(f"{ic}|{d}|{a['fl']}") or []
+            if len(hist) < 3 or len({x[0] for x in hist}) < 2:
+                continue
+            types = [x[1] for x in hist if x[1]]
+            if types and not any(same_family(a["type"], x) for x in types):
+                usual = max(set(types), key=types.count)
+                return f"普段と違う機材 {a['type']}（{a['fl']} はいつも {usual}）"
+    return None
+
+
+def returns_expected(reg, sev, orig, dest, aps):
+    """その区間の先から撮影拠点へ戻ってくると見込めるか。
+    ・日本の航空会社の機体（JA）が撮影拠点から出た区間: 行き先で折り返して戻る（例: JL6でJFK→翌日JL5）
+    ・日本の特別塗装機が国内の空港どうしを飛んでいる区間: 国内線網の中で羽田・成田に戻ってくる
+    ・外国の航空会社の機体は対象外（本拠地に帰った後は世界中どこへ飛ぶか分からない。
+      例: エミレーツのA380は成田→ドバイの後、日本に戻るとは限らない）
+    ・撮影拠点に関係のない区間（例: カンタスのロサンゼルス→シドニー）も対象外"""
+    reg = (reg or "").upper()
+    japanese = reg.startswith("JA") or bool(re.match(r"^\d{2}-\d{4}$", reg))
+    if not japanese or not dest or dest in aps:
+        return False
+    if orig in aps:
+        return True
+    return sev == "watch" and dest[:2] in ("RJ", "RO") and (orig or "RJ")[:2] in ("RJ", "RO")
 SHIP_DAYS = 28
 
 
@@ -1564,6 +1648,20 @@ def process_live(net, cfg, state, watch, now_utc, tz, tt, pa=None):
         except Exception as e:  # noqa: BLE001
             LOG.err("ADS-B 監視機の照会", e)
 
+    # 3a) 国内線には入らない機材・その空港には来ない機材を、日本周辺で探す（10分おき）。
+    #     出発地を飛び立った時点で見つかるので、到着の1〜2時間前に分かる
+    dom_types = domestic_candidate_types(cfg)
+    if dom_types and nowts - state.get("gdom_at", 0) >= cfg.get("domestic_unusual_minutes", 10) * 60 - 60:
+        try:
+            n = 0
+            for x in net.types(sorted(dom_types)):
+                a = ac_norm(x)
+                if a["lat"] is not None and in_japan(a["lat"], a["lon"]) and add(a):
+                    n += 1
+            state["gdom_at"], state["gdom_n"] = nowts, n
+        except Exception as e:  # noqa: BLE001
+            LOG.err("ADS-B 国内の珍しい機材の照会", e)
+
     # 3) 希少機種を型式で世界中から（30分おき）
     if nowts - state.get("gtype_at", 0) >= cfg["global_type_minutes"] * 60 - 60:
         try:
@@ -1603,9 +1701,16 @@ def process_live(net, cfg, state, watch, now_utc, tz, tt, pa=None):
 
     # 分類（経路は不要）
     regulars = pa_regulars(cfg, state, dt.datetime.fromtimestamp(nowts, tz).date())
+    ttx0 = tt_index(tt)
+    today0 = dt.datetime.fromtimestamp(nowts, tz).date().isoformat()
     for a in seen.values():
         a["sev"], a["why"] = classify(a, watch, cfg, pa, regulars)
         a["fl"] = cs_to_fl(a["cs"], state)
+        # 普段と違う機材（例: いつもB787の国内線にB777-300ER）。イレギュラー運航こそ撮りたい
+        if a["sev"] in (None, "op") and a["fl"] and a["type"]:
+            u = unusual_equipment(a, aps, ttx0, state.get("equip", {}), today0)
+            if u:
+                a["sev"], a["why"], a["unusual"] = "type", u, True
         lab = emg_label(a)
         if lab and not a["ground"]:
             a["emg"] = lab
@@ -1622,7 +1727,7 @@ def process_live(net, cfg, state, watch, now_utc, tz, tt, pa=None):
     for a in sorted(seen.values(), key=lambda a: (0 if a["sev"] in NOTABLE else 1)):
         if not a["cs"] or a["ground"] or a["cs"] in rc or not re.match(r"^[A-Z]{3}\d", a["cs"]):
             continue
-        if a["sev"] in NOTABLE or a["hex"] in near:
+        if a["sev"] in NOTABLE or a["hex"] in near or (a["type"] in dom_types and in_japan(a["lat"], a["lon"])):
             ask.append({"callsign": a["cs"], "lat": round(a["lat"], 3), "lng": round(a["lon"], 3)})
     if ask:
         try:
@@ -1638,7 +1743,27 @@ def process_live(net, cfg, state, watch, now_utc, tz, tt, pa=None):
     for a in seen.values():
         route = rc.get(a["cs"], {})
         a["route"] = route.get("ap") if route.get("ok") else None
+        # 経路データに無い便でも、羽田・成田の公式時刻表に載っていれば行き先が分かる
+        if not a["route"] and a.get("fl"):
+            for ic in aps:
+                for d_ in ("arr", "dep"):
+                    row = ttx0.get((ic, today0, d_, a["fl"]))
+                    if row:
+                        code = row_code(row) or row.get("ap")
+                        other = (iata_geo(code) or (code,))[0] if code else None
+                        if other:
+                            a["route"] = [other, ic] if d_ == "arr" else [ic, other]
+                        break
+                if a["route"]:
+                    break
     live = list(seen.values())
+
+    # 4b) 経路が分かった機体のうち、国内線に珍しい機材・その空港に珍しい機材
+    for a in seen.values():
+        if a["sev"] in (None, "op") and a["type"] in dom_types:
+            u = domestic_unusual(a, cfg, aps)
+            if u:
+                a["sev"], a["why"], a["unusual"] = "type", u, True
 
     # 5) 到着予定（確定）と折り返し待ちを保持する。洋上では何時間も見えなくなるため、
     #    一度つかんだ到着予定は到着予想時刻まで消さない
@@ -1653,7 +1778,8 @@ def process_live(net, cfg, state, watch, now_utc, tz, tt, pa=None):
     for k, v in outb.items():
         if v.get("hex") and (v["hex"] not in latest or v["eta_dest"] > outb[latest[v["hex"]]]["eta_dest"]):
             latest[v["hex"]] = k
-    for k in [k for k, v in outb.items() if latest.get(v.get("hex")) != k]:
+    for k in [k for k, v in outb.items() if latest.get(v.get("hex")) != k
+              or not returns_expected(v.get("reg"), v.get("sev"), v.get("orig"), v.get("dest"), aps)]:
         del outb[k]
     for a in seen.values():
         if a["ground"] or a["sev"] not in NOTABLE or not a["gs"]:
@@ -1678,8 +1804,8 @@ def process_live(net, cfg, state, watch, now_utc, tz, tt, pa=None):
             if dest in aps:
                 inb[key] = dict(base, dest=dest, orig=orig, eta=eta, dist=round(dist), geo=False,
                                 first=inb.get(key, {}).get("first", nowts))
-            else:
-                # 撮影拠点以外へ向かっている（羽田・成田発に限らない）: そこから戻ってくる便を予測する
+            elif returns_expected(a["reg"], a["sev"], orig, dest, aps):
+                # 戻ってくると見込める区間だけ記録し、そこから戻る便を予測する
                 outb[key] = dict(base, orig=orig, dest=dest, eta_dest=eta)
         elif a["alt"] is not None and a["alt"] < 25000 and (a["vr"] or 0) < -300:
             # 経路不明: 空港付近では進入経路に沿って大きく曲がるため、機首の向きでは行き先を決めない。
@@ -2168,7 +2294,7 @@ def events_for(ic, day, cfg, state, watch, live, watched_air, tt, ttx, now_utc, 
     for k, r in state.get("outbound", {}).items():
         if r["dest"] == ic:
             continue
-        ret = predict_return(ic, r, tt, tz, day, state, nowts)
+        ret = predict_return(ic, r, tt, tz, day, state, nowts, cfg["airports"])
         if ret:
             put(ret | {"reg": r.get("reg"), "hex": r["hex"], "type": r.get("type"),
                        "name": watch.get(r.get("reg"), {}).get("name") or r.get("why"), "cat": r["sev"]})
@@ -2319,35 +2445,62 @@ def _tt_arrival(tt, ic, fl, after, tz):
     return best
 
 
-def predict_return(ic, r, tt, tz, day, state=None, nowts=None):
+def _first_returns(ap, r, tt, tz, arr_dest, prefix, dest_iata, names):
+    """dest から ap へ戻る便の候補（時刻順）。折り返し時間と飛行時間を見込んだ最早時刻以降"""
+    g_d, g_h = iata_geo(r["dest"]), AIRPORT_INFO.get(ap)
+    if not g_d or not g_h or not prefix:
+        return [], False, None
+    dist = nm_between(g_d[1], g_d[2], g_h["lat"], g_h["lon"])
+    long_haul = dist > 2500
+    block = dist / (470 if long_haul else 430) * 60 + (30 if long_haul else 25)
+    earliest = arr_dest + dt.timedelta(minutes=(150 if long_haul else 40) + block)
+    out = []
+    for d_iso2, rows in (tt.get(ap) or {}).items():
+        if d_iso2.startswith("_"):
+            continue
+        d2 = dt.date.fromisoformat(d_iso2)
+        for row in rows:
+            if row["dir"] != "arr" or (row["ap"] not in names and row.get("apc") != dest_iata) \
+                    or not row["fl"].startswith(prefix):
+                continue
+            m = _hhmm_to_min(row["time"])
+            if m is None:
+                continue
+            tm = dt.datetime.combine(d2, dt.time(m // 60, m % 60), tz)
+            if earliest - dt.timedelta(minutes=10) <= tm <= earliest + dt.timedelta(hours=30):
+                out.append((tm, row))
+    out.sort(key=lambda x: x[0])
+    return out, long_haul, earliest
+
+
+def predict_return(ic, r, tt, tz, day, state=None, nowts=None, aps=None):
     """撮影拠点以外へ向かっている注目機が、ic に戻ってくる便を予測する。
-    1) 機材繰りの学習（同じ機体が続けて乗った便の記録）をたどり、ic 着の便に行き着けばそれを採用
-    2) 行き先から ic への最初の便（時刻表）。「その空港に着いた後、次に ic へ飛んだ割合」で確度を決める
-    3) 時刻表の無い空港は概算（この空港から出て行った機体だけ）"""
+    1) 機材繰りの学習（同じ機体が続けて乗った便の記録）をたどり、羽田・成田どちらかの着便に行き着けばそれを採用
+    2) 行き先から戻る最初の便（時刻表）。羽田・成田の両方に候補があれば（例: ANAの777がHND→SFO→NRT）
+       どちらとも言えないので「傾向」とし、もう一方の候補も理由欄に書く
+    3) 時刻表の無い空港は概算（この空港から出て行った機体だけ）
+    機材が普段と違っても候補から外さない（イレギュラー運航こそ撮りたいため）"""
     dest = r["dest"]
     g_d, g_h = iata_geo(dest), AIRPORT_INFO.get(ic)
     if not g_d or not g_h:
         return None
+    aps = [a for a in (aps or [ic]) if AIRPORT_INFO.get(a)]
     ship = (state or {}).get("ship") or {}
-    dist = nm_between(g_d[1], g_d[2], g_h["lat"], g_h["lon"])
-    long_haul = dist > 2500
-    block = dist / (470 if long_haul else 430) * 60 + (30 if long_haul else 25)
-    turn = 150 if long_haul else 40
     arr_dest = dt.datetime.fromtimestamp(r["eta_dest"], tz)
-    earliest = arr_dest + dt.timedelta(minutes=turn + block)
     dest_iata = next((i for i, c in GEO["airports"].items() if c[0] == dest), None)
     names = [ja for ja, i in GEO["ja2iata"].items() if i == dest_iata]
     prefix = (r.get("fl") or "")[:2]
-    days_tt = tt.get(ic) or {}
+    dist = nm_between(g_d[1], g_d[2], g_h["lat"], g_h["lon"])
+    long_haul = dist > 2500
     night = arr_dest.hour >= 19 or arr_dest.hour < 5
     where = (f"{arr_dest.strftime('%m/%d %H:%M').lstrip('0')}に{ap_label(dest)}着"
              + ("（夜間駐機）" if night and not long_haul else "") if arr_dest.timestamp() < (nowts or dt.datetime.now(tz).timestamp())
              else f"いま{ap_label(dest)}へ飛行中（{arr_dest.strftime('%m/%d %H:%M').lstrip('0')}着見込み）")
     ic_name = AIRPORT_INFO.get(ic, {}).get("name", ic)
 
-    # 1) 機材繰りの学習をたどる（最大6便先まで）
+    # 1) 機材繰りの学習をたどる（最大6便先。羽田・成田のどちらに着く便でも止まる）
     cur, prob, path, seen_ = r.get("fl"), 1.0, [], set()
-    after = arr_dest + dt.timedelta(minutes=turn)
+    after = arr_dest + dt.timedelta(minutes=40)
     for _ in range(6):
         if not cur or cur in seen_:
             break
@@ -2358,10 +2511,10 @@ def predict_return(ic, r, tt, tz, day, state=None, nowts=None):
         nxt, n = cands_[0]
         prob *= n / total
         path.append(f"{nxt}（{total}回中{n}回）")
-        hit = _tt_arrival(tt, ic, nxt, after, tz)
-        if hit:
-            tm, row = hit
-            if tm.date() != day:
+        hits = [(ap2,) + h for ap2 in aps for h in [_tt_arrival(tt, ap2, nxt, after, tz)] if h]
+        if hits:
+            ap2, tm, row = min(hits, key=lambda x: x[1])
+            if ap2 != ic or tm.date() != day:
                 return None
             return {"key": f"arr|{row['fl']}", "dir": "arr", "time": row["rev"] or row["time"], "sched": row["time"],
                     "fl": row["fl"], "conf": "有力" if prob >= 0.5 else "傾向", "status": row.get("status", ""),
@@ -2369,47 +2522,45 @@ def predict_return(ic, r, tt, tz, day, state=None, nowts=None):
                     "reason": f"{where}。機材繰りの学習: {r.get('fl')} の後は " + " → ".join(path)}
         cur = nxt
 
-    # 2) 行き先から ic への最初の便（時刻表）
-    cands = []
-    if prefix and (names or dest_iata):
-        for d_iso2, rows in days_tt.items():
-            if d_iso2.startswith("_"):
-                continue
-            d2 = dt.date.fromisoformat(d_iso2)
-            for row in rows:
-                if row["dir"] != "arr" or (row["ap"] not in names and row.get("apc") != dest_iata) \
-                        or not row["fl"].startswith(prefix):
-                    continue
-                m = _hhmm_to_min(row["time"])
-                if m is None:
-                    continue
-                tm = dt.datetime.combine(d2, dt.time(m // 60, m % 60), tz)
-                if earliest - dt.timedelta(minutes=10) <= tm <= earliest + dt.timedelta(hours=30):
-                    cands.append((tm, row))
-    cands.sort(key=lambda x: x[0])
+    # 2) 行き先から戻る最初の便（時刻表）。羽田・成田の両方を見る
+    per_ap = {}
+    for ap2 in aps:
+        c2, lh2, _ = _first_returns(ap2, r, tt, tz, arr_dest, prefix, dest_iata, names)
+        if c2:
+            per_ap[ap2] = c2
+    cands = per_ap.get(ic) or []
     if cands:
         tm, row = cands[0]
         if tm.date() != day:
             return None
         alt = f"、次点 {cands[1][1]['fl']} {cands[1][0].strftime('%m/%d %H:%M').lstrip('0')}" if len(cands) > 1 else ""
+        others = {a2: c2[0] for a2, c2 in per_ap.items() if a2 != ic}
+        other_txt = "".join(f"。{AIRPORT_INFO[a2]['name']}に戻る場合は {c[1]['fl']} {c[0].strftime('%m/%d %H:%M').lstrip('0')}"
+                            for a2, c in others.items())
         n, total = next_dest_share(ship, (r.get("cs") or "")[:3], dest, ic)
-        if long_haul:
-            conf, stat = "有力", ""
-        elif total >= 4 and n / total >= 0.7:
+        learned = total >= 4 and n / total >= 0.7
+        if learned:
             conf, stat = "有力", f"。{ap_label(dest)}に着いた後、次に{ic_name}へ飛んだのは{total}回中{n}回"
+        elif long_haul and not others:
+            conf, stat = "有力", ""
         else:
             conf = "傾向"
             stat = (f"。{ap_label(dest)}に着いた後、次に{ic_name}へ飛んだのは{total}回中{n}回" if total
-                    else "。別の空港へ向かうこともあります（機材繰りを学習中）")
+                    else ("。羽田・成田のどちらに戻るかは分かりません" if others
+                          else "。別の空港へ向かうこともあります（機材繰りを学習中）"))
         head = "翌朝の最初の便" if night and not long_haul and tm.date() > arr_dest.date() else "折り返しの最短便"
         return {"key": f"arr|{row['fl']}", "dir": "arr", "time": row["rev"] or row["time"], "sched": row["time"],
                 "fl": row["fl"], "conf": conf, "status": row.get("status", ""), "other": row["ap"],
                 "otherCode": dest_iata, "past": False,
-                "reason": f"{where}。{ap_label(dest)}から{ic_name}への{head}{alt}{stat}"}
+                "reason": f"{where}。{ap_label(dest)}から{ic_name}への{head}{alt}{other_txt}{stat}"}
     # 3) 時刻表にその航空会社の便が無い空港（成田の貨物便など）: この空港から出て行った機体だけ概算
+    days_tt = tt.get(ic) or {}
+    _, _, earliest = _first_returns(ic, r, tt, tz, arr_dest, prefix or "--", dest_iata, names)
+    if earliest is None:
+        return None
     has_airline = prefix and any(row["fl"].startswith(prefix) for d_, rows in days_tt.items()
                                  if not d_.startswith("_") for row in rows)
-    if has_airline or earliest.date() != day or r.get("orig") != ic:
+    if has_airline or per_ap or earliest.date() != day or r.get("orig") != ic:
         return None
     return {"key": f"ret|{r['hex']}", "dir": "arr", "time": earliest.strftime("%H:%M"), "approx": True,
             "fl": None, "conf": "傾向", "status": "", "other": ap_label(dest), "otherCode": dest_iata, "past": False,
@@ -2733,6 +2884,8 @@ def main():
     add = [str(t).upper() for t in (cfg.get("extra_rare_types") or []) if isinstance(t, str)]
     drop = {str(t).upper() for t in (cfg.get("not_rare_types") or []) if isinstance(t, str)}
     cfg["rare_types"] = [t for t in dict.fromkeys(list(cfg["rare_types"]) + add) if t not in drop]
+    if not isinstance(cfg.get("airport_unusual_types"), dict):
+        cfg["airport_unusual_types"] = DEFAULT_CONFIG["airport_unusual_types"]
     unknown = [a for a in cfg["airports"] if a not in AIRPORT_INFO and not iata_geo(a)]
     if unknown:
         cfg_error = f"未対応の空港コード: {', '.join(unknown)}（ICAOコードで指定してください）"
