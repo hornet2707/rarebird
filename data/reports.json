@@ -1,0 +1,706 @@
+[
+ {
+  "id": "x1v7NVQh2uPX",
+  "at": "2026-09-28T21:31:30+00:00",
+  "report": {
+   "src": "画面",
+   "reason": "その他",
+   "ev": {
+    "key": "ground|861ed6",
+    "ap": "RJTT",
+    "day": "2026-09-29",
+    "time": "06:23",
+    "sched": null,
+    "dir": "ground",
+    "fl": "",
+    "reg": "JA614A",
+    "hex": "861ed6",
+    "type": "B763",
+    "name": "スターアライアンス塗装",
+    "cat": "watch",
+    "conf": "確定",
+    "status": "駐機中",
+    "other": "",
+    "why": "06:23 時点で地上に駐機（便名なし）",
+    "rwy": "着34L/34R・発34R/05",
+    "rwyConf": "実運用"
+   },
+   "seen": "2026-09-28T21:31:29.691Z",
+   "gen": "2026-09-28T21:23:51.126918+00:00",
+   "version": "2.3.0"
+  },
+  "evidence": {
+   "mv": {
+    "RJTT|ground|861ed6|2026-09-28": {
+     "ap": "RJTT",
+     "dir": "ground",
+     "hex": "861ed6",
+     "reg": "JA614A",
+     "type": "B763",
+     "cs": "ANA651",
+     "fl": "NH651",
+     "other": "岡山",
+     "basis": "時刻表",
+     "sev": "watch",
+     "why": "スターアライアンス塗装",
+     "first": 1790550574.64089,
+     "last": 1790586059.624977,
+     "evt": 1790550574.64089,
+     "rwy": null,
+     "date": "2026-09-28",
+     "landed": true,
+     "gdiff": null,
+     "evt_date": "2026-09-28"
+    },
+    "RJTT|dep|861ed6|ANA651|2026-09-28": {
+     "ap": "RJTT",
+     "dir": "dep",
+     "hex": "861ed6",
+     "reg": "JA614A",
+     "type": "B763",
+     "cs": "ANA651",
+     "fl": "NH651",
+     "other": "岡山",
+     "basis": "時刻表",
+     "sev": "watch",
+     "why": "スターアライアンス塗装",
+     "first": 1790551318.061665,
+     "last": 1790551318.061665,
+     "evt": 1790551164.2832477,
+     "rwy": null,
+     "date": "2026-09-28",
+     "landed": false,
+     "gdiff": null,
+     "evt_date": "2026-09-28",
+     "learned": true
+    },
+    "RJTT|arr|861ed6|ANA654|2026-09-28": {
+     "ap": "RJTT",
+     "dir": "arr",
+     "hex": "861ed6",
+     "reg": "JA614A",
+     "type": "B763",
+     "cs": "ANA654",
+     "fl": "NH654",
+     "other": "岡山",
+     "basis": "時刻表",
+     "sev": "watch",
+     "why": "スターアライアンス塗装",
+     "first": 1790561590.858672,
+     "last": 1790562756.479257,
+     "evt": 1790561931.6546342,
+     "rwy": null,
+     "date": "2026-09-28",
+     "landed": true,
+     "gdiff": null,
+     "evt_date": "2026-09-28",
+     "learned": true
+    },
+    "RJTT|arr|861ed6|ANA626|2026-09-28": {
+     "ap": "RJTT",
+     "dir": "arr",
+     "hex": "861ed6",
+     "reg": "JA614A",
+     "type": "B763",
+     "cs": "ANA626",
+     "fl": "NH626",
+     "other": "鹿児島",
+     "basis": "時刻表",
+     "sev": "watch",
+     "why": "スターアライアンス塗装",
+     "first": 1790580857.912878,
+     "last": 1790581902.803736,
+     "evt": 1790582041.1630127,
+     "rwy": "16L",
+     "date": "2026-09-28",
+     "landed": false,
+     "gdiff": null,
+     "evt_date": "2026-09-28",
+     "learned": true
+    },
+    "RJTT|arr|861ed6|ANA598|2026-09-28": {
+     "ap": "RJTT",
+     "dir": "arr",
+     "hex": "861ed6",
+     "reg": "JA614A",
+     "type": "B763",
+     "cs": "ANA598",
+     "fl": "NH598",
+     "other": "松山",
+     "basis": "時刻表",
+     "sev": "watch",
+     "why": "スターアライアンス塗装",
+     "first": 1790597956.839575,
+     "last": 1790597956.839575,
+     "evt": 1790597973.2282212,
+     "rwy": null,
+     "date": "2026-09-28",
+     "landed": true,
+     "gdiff": null,
+     "evt_date": "2026-09-28",
+     "learned": true
+    },
+    "RJTT|ground|861ed6|2026-09-29": {
+     "ap": "RJTT",
+     "dir": "ground",
+     "hex": "861ed6",
+     "reg": "JA614A",
+     "type": "B763",
+     "cs": "",
+     "fl": null,
+     "other": null,
+     "basis": "不明",
+     "sev": "watch",
+     "why": "スターアライアンス塗装",
+     "first": 1790630631.126918,
+     "last": 1790630631.126918,
+     "evt": 1790630631.126918,
+     "rwy": null,
+     "date": "2026-09-29",
+     "landed": false,
+     "gnd": false,
+     "gnd_at": null,
+     "evt_date": "2026-09-29"
+    }
+   },
+   "inbound": {},
+   "outbound": {
+    "861ed6|ANA987": {
+     "hex": "861ed6",
+     "reg": "JA614A",
+     "type": "B763",
+     "cs": "ANA987",
+     "fl": "NH987",
+     "sev": "watch",
+     "why": "スターアライアンス塗装",
+     "updated": 1790631665.613114,
+     "orig": "RJTT",
+     "dest": "RJCC",
+     "eta_dest": 1790635006.5299332
+    }
+   },
+   "tracks": {
+    "861ed6": [
+     [
+      1790630631,
+      35.5547,
+      139.7908,
+      0,
+      56,
+      10,
+      null,
+      "",
+      "watch",
+      "JA614A",
+      null
+     ],
+     [
+      1790631665,
+      36.7228,
+      140.4424,
+      33000,
+      8,
+      483,
+      704,
+      "ANA987",
+      "watch",
+      "JA614A",
+      "NH987"
+     ]
+    ]
+   },
+   "routes": {
+    "ANA987": {
+     "d": "2026-09-29",
+     "ap": [
+      "RJTT",
+      "RJCC"
+     ],
+     "ok": true,
+     "src": "vrs"
+    }
+   },
+   "runway_live": {
+    "RJTT": {
+     "code": "N",
+     "arr": {
+      "34L": 1
+     },
+     "dep": {},
+     "at": 1790630631.126918
+    },
+    "RJAA": {
+     "code": "N",
+     "arr": {
+      "34R": 1,
+      "34L": 1
+     },
+     "dep": {},
+     "at": 1790631665.613114
+    }
+   },
+   "errors": [
+    "経路照会（adsb.lol）: RuntimeError: JSONでない応答（0バイト）: ''"
+   ],
+   "version": "2.3.0"
+  },
+  "status": "未確認"
+ },
+ {
+  "id": "RmNMQvBQVTyd",
+  "at": "2026-10-01T00:06:30+00:00",
+  "report": {
+   "src": "画面",
+   "reason": "来なかった",
+   "ev": {
+    "key": "pattern|B-2002",
+    "ap": "RJTT",
+    "day": "2026-10-01",
+    "time": null,
+    "dir": "both",
+    "fl": null,
+    "reg": "B-2002",
+    "type": null,
+    "name": "特別塗装機",
+    "cat": "watch",
+    "conf": "傾向",
+    "status": "",
+    "other": "",
+    "why": "直近14日で羽田に来た日 2日（飛行を確認した3日中）",
+    "rwy": "着34L/34R・発34R/05",
+    "rwyConf": "実運用"
+   },
+   "seen": "2026-10-01T00:06:29.793Z",
+   "gen": "2026-09-30T23:49:51.600130+00:00",
+   "version": "2.5.0"
+  },
+  "evidence": {
+   "mv": {},
+   "inbound": {},
+   "outbound": {},
+   "tracks": {},
+   "routes": {},
+   "runway_live": {
+    "RJTT": {
+     "code": "N",
+     "arr": {
+      "34L": 3
+     },
+     "dep": {},
+     "at": 1790814924.01409
+    },
+    "RJAA": {
+     "code": "N",
+     "arr": {
+      "34R": 1
+     },
+     "dep": {},
+     "at": 1790814924.01409
+    }
+   },
+   "errors": [
+    "ADS-B 政府機の全世界照会: HTTPError: HTTP Error 403: Forbidden",
+    "経路照会（adsb.lol）: RuntimeError: JSONでない応答（0バイト）: ''"
+   ],
+   "version": "2.5.0"
+  },
+  "status": "未確認"
+ },
+ {
+  "id": "rWuB8zSDXZzh",
+  "at": "2026-10-01T08:59:54+00:00",
+  "report": {
+   "src": "画面",
+   "reason": "空港が違う",
+   "ev": {
+    "key": "arr|JL672",
+    "ap": "RJTT",
+    "day": "2026-10-01",
+    "time": "18:57",
+    "sched": "19:00",
+    "dir": "arr",
+    "fl": "JL672",
+    "reg": "JA30CA",
+    "hex": "850edc",
+    "type": "D228",
+    "name": "羽田には珍しい機材 D228",
+    "cat": "type",
+    "conf": "傾向",
+    "status": "",
+    "other": "大分",
+    "why": "10/01 14:46に大分着。大分から羽田への折り返しの最短便、次点 JL674 10/01 20:40。大分に着いた後、次に羽田へ飛んだのは1回中1回",
+    "rwy": "34L/34R",
+    "rwyConf": "実運用"
+   },
+   "seen": "2026-10-01T08:59:53.816Z",
+   "gen": "2026-10-01T08:49:23.476278+00:00",
+   "version": "2.5.0"
+  },
+  "evidence": {
+   "mv": {
+    "RJTT|arr|851958|JAL672|2026-09-29": {
+     "ap": "RJTT",
+     "dir": "arr",
+     "hex": "851958",
+     "reg": "JA339J",
+     "type": "B738",
+     "cs": "JAL672",
+     "fl": "JL672",
+     "other": "OIT",
+     "basis": "時刻表",
+     "sev": "watch",
+     "why": "JAL Jubilee Express",
+     "first": 1790676026.324095,
+     "last": 1790676026.324095,
+     "evt": 1790676284.6570458,
+     "rwy": "34L",
+     "date": "2026-09-29",
+     "landed": false,
+     "gnd": false,
+     "gnd_at": null,
+     "evt_date": "2026-09-29",
+     "learned": true
+    },
+    "RJTT|dep|850edc|JAL665|2026-10-01": {
+     "ap": "RJTT",
+     "dir": "dep",
+     "hex": "850edc",
+     "reg": "JA30CA",
+     "type": "D228",
+     "cs": "JAL665",
+     "fl": "JL665",
+     "other": "OIT",
+     "basis": "時刻表",
+     "sev": "type",
+     "why": "羽田には珍しい機材 D228",
+     "first": 1790825693.211501,
+     "last": 1790825693.211501,
+     "evt": 1790825281.0449722,
+     "rwy": null,
+     "date": "2026-10-01",
+     "landed": false,
+     "gnd": false,
+     "gnd_at": null,
+     "evt_date": "2026-10-01",
+     "learned": true
+    }
+   },
+   "inbound": {},
+   "outbound": {
+    "850edc|JAL665": {
+     "hex": "850edc",
+     "reg": "JA30CA",
+     "type": "D228",
+     "cs": "JAL665",
+     "fl": "JL665",
+     "sev": "type",
+     "why": "羽田には珍しい機材 D228",
+     "updated": 1790825693.211501,
+     "orig": "RJTT",
+     "dest": "RJFO",
+     "eta_dest": 1790833607.624289
+    }
+   },
+   "tracks": {
+    "850edc": [
+     [
+      1790825693,
+      35.2182,
+      139.5687,
+      5025,
+      20,
+      197,
+      -512,
+      "JAL665",
+      "type",
+      "JA30CA",
+      "JL665"
+     ]
+    ],
+    "851958": [
+     [
+      1790824380,
+      40.4812,
+      143.0937,
+      37000,
+      55,
+      550,
+      -64,
+      "JAL575",
+      "watch",
+      "JA339J",
+      "JL575"
+     ],
+     [
+      1790830519,
+      41.5629,
+      143.6742,
+      30500,
+      196,
+      395,
+      1248,
+      "JAL572",
+      "watch",
+      "JA339J",
+      "JL572"
+     ],
+     [
+      1790831746,
+      39.9769,
+      142.1545,
+      37975,
+      234,
+      350,
+      -64,
+      "JAL572",
+      "watch",
+      "JA339J",
+      "JL572"
+     ],
+     [
+      1790832925,
+      38.3163,
+      141.0901,
+      37975,
+      212,
+      363,
+      -64,
+      "JAL572",
+      "watch",
+      "JA339J",
+      "JL572"
+     ],
+     [
+      1790834089,
+      36.4436,
+      140.2895,
+      14450,
+      189,
+      332,
+      -896,
+      "JAL572",
+      "watch",
+      "JA339J",
+      "JL572"
+     ],
+     [
+      1790835623,
+      35.5511,
+      139.7945,
+      0,
+      149,
+      19,
+      null,
+      "JAL572",
+      "watch",
+      "JA339J",
+      "JL572"
+     ],
+     [
+      1790840905,
+      35.0183,
+      138.3534,
+      28000,
+      259,
+      409,
+      -96,
+      "JL461",
+      "watch",
+      "JA339J",
+      null
+     ],
+     [
+      1790841763,
+      34.4654,
+      136.4598,
+      21375,
+      247,
+      391,
+      -1664,
+      "JL461",
+      "watch",
+      "JA339J",
+      null
+     ]
+    ]
+   },
+   "routes": {
+    "JAL665": {
+     "d": "2026-10-01",
+     "ap": [
+      "RJTT",
+      "RJFO"
+     ],
+     "ok": true,
+     "src": "vrs"
+    },
+    "JAL575": {
+     "d": "2026-10-01",
+     "ap": [
+      "RJTT",
+      "RJCB"
+     ],
+     "ok": true,
+     "src": "vrs"
+    },
+    "JAL572": {
+     "d": "2026-10-01",
+     "ap": [
+      "RJCB",
+      "RJTT"
+     ],
+     "ok": true,
+     "src": "vrs"
+    },
+    "JL461": null
+   },
+   "runway_live": {
+    "RJTT": {
+     "code": "N",
+     "arr": {
+      "34L": 1,
+      "34R": 1
+     },
+     "dep": {
+      "04": 1
+     },
+     "at": 1790845477.431093
+    },
+    "RJAA": {
+     "code": "N",
+     "arr": {
+      "34R": 2
+     },
+     "dep": {
+      "34L": 1
+     },
+     "at": 1790845477.431093
+    }
+   },
+   "errors": [
+    "経路照会（adsb.lol）: RuntimeError: JSONでない応答（0バイト）: ''",
+    "経路データ（予備） RCH: HTTPError: HTTP Error 404: Not Found",
+    "経路データ（予備） NCR: HTTPError: HTTP Error 404: Not Found",
+    "経路データ（予備） THY: HTTPError: HTTP Error 404: Not Found"
+   ],
+   "version": "2.5.0"
+  },
+  "status": "未確認"
+ },
+ {
+  "id": "V3rfEyaTsMU0",
+  "at": "2026-10-02T23:49:35+00:00",
+  "report": {
+   "src": "画面",
+   "reason": "来なかった",
+   "ev": {
+    "key": "pattern|D-ABYN",
+    "ap": "RJTT",
+    "day": "2026-10-03",
+    "time": null,
+    "dir": "both",
+    "fl": null,
+    "reg": "D-ABYN",
+    "type": null,
+    "name": "特別塗装機",
+    "cat": "watch",
+    "conf": "傾向",
+    "status": "",
+    "other": "",
+    "why": "直近14日で羽田に来た日 2日（飛行を確認した5日中）",
+    "rwy": "着34L/34R・発34R/05",
+    "rwyConf": "実運用"
+   },
+   "seen": "2026-10-02T23:49:34.921Z",
+   "gen": "2026-10-02T23:33:39.228264+00:00",
+   "version": "2.5.0"
+  },
+  "evidence": {
+   "mv": {
+    "RJTT|dep|3c4b2e|DLH717|2026-10-01": {
+     "ap": "RJTT",
+     "dir": "dep",
+     "hex": "3c4b2e",
+     "reg": "D-ABYN",
+     "type": "B748",
+     "cs": "DLH717",
+     "fl": "LH717",
+     "other": "FRA",
+     "basis": "時刻表",
+     "sev": "watch",
+     "why": "特別塗装機",
+     "first": 1790824380.216407,
+     "last": 1790824380.216407,
+     "evt": 1790824210.8373184,
+     "rwy": null,
+     "date": "2026-10-01",
+     "landed": false,
+     "gnd": false,
+     "gnd_at": null,
+     "evt_date": "2026-10-01",
+     "learned": true
+    }
+   },
+   "inbound": {},
+   "outbound": {},
+   "tracks": {
+    "3c4b2e": [
+     [
+      1790963904,
+      -23.9069,
+      26.5392,
+      31675,
+      336,
+      517,
+      576,
+      "DLH573",
+      "watch",
+      "D-ABYN",
+      "LH573"
+     ]
+    ]
+   },
+   "routes": {
+    "DLH573": {
+     "d": "2026-10-03",
+     "ap": [
+      "FAOR",
+      "EDDF"
+     ],
+     "ok": true,
+     "src": "vrs"
+    }
+   },
+   "runway_live": {
+    "RJTT": {
+     "code": "N",
+     "arr": {
+      "34L": 3
+     },
+     "dep": {
+      "05": 1
+     },
+     "at": 1790984904.166927
+    },
+    "RJAA": {
+     "code": "N",
+     "arr": {
+      "34R": 1
+     },
+     "dep": {
+      "34L": 1
+     },
+     "at": 1790984904.166927
+    }
+   },
+   "errors": [
+    "ADS-B 希少機種の全世界照会: HTTPError: HTTP Error 403: Forbidden",
+    "ADS-B 政府機の全世界照会: HTTPError: HTTP Error 403: Forbidden",
+    "ADS-B 緊急信号 7700 の照会: HTTPError: HTTP Error 403: Forbidden",
+    "経路照会（adsb.lol）: RuntimeError: JSONでない応答（0バイト）: ''"
+   ],
+   "version": "2.5.0"
+  },
+  "status": "未確認"
+ }
+]
