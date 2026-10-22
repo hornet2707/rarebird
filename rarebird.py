@@ -36,7 +36,7 @@ import urllib.error
 import urllib.request
 from zoneinfo import ZoneInfo
 
-VERSION = "2.5.0"
+VERSION = "2.7.0"
 
 # --------------------------------------------------------------------------
 # 既定設定（config.json で上書きできる）
@@ -53,7 +53,7 @@ DEFAULT_CONFIG = {
     # その空港にはふつう来ない機材（その空港に発着する便なら注目機にする）
     "airport_unusual_types": {
         "RJTT": ["DH8D", "DH8A", "DH8B", "DH8C", "AT43", "AT45", "AT46", "AT72", "AT75", "AT76", "SF34", "D228",
-                 "E170", "E75S", "E75L", "E190", "CRJ2", "CRJ7", "CRJ9"],
+                 "CRJ2", "CRJ7", "CRJ9"],  # E170/E190 は J-AIR が羽田に毎日来るので外した（10/22）
         "RJAA": ["DH8A", "DH8B", "DH8C", "AT43", "AT45", "AT46", "AT72", "AT75", "AT76", "SF34", "D228"],
     },
     "domestic_unusual_minutes": 10,  # 上の機材を国内で探す間隔（分）
@@ -339,6 +339,12 @@ class Net:
         """そのスコークを出している機体を世界中から"""
         return self.adsb(f"/sqk/{code}")
 
+    def callsign(self, cs):
+        """便名（コールサイン）で世界中から。予報に出ている便がいまどこを飛んでいるか
+        （続けて問い合わせると 403 で断られやすいので、少し間をあける）"""
+        time.sleep(0.5)
+        return self.adsb(f"/callsign/{cs}")
+
     def reports(self, server, topic, since):
         """画面・通知から送られた誤り報告（ntfy に12時間保管される）を受け取る"""
         return self.get_text(f"{server.rstrip('/')}/{topic}/json?poll=1&since={since}", timeout=20)
@@ -462,6 +468,9 @@ class FixtureNet(Net):
 
     def squawk(self, code):
         return [a for a in self._f("squawk.json", {"ac": []}).get("ac", []) if str(a.get("squawk")) == code]
+
+    def callsign(self, cs):
+        return [a for a in self._f("callsign.json", {"ac": []}).get("ac", []) if clean_cs(a.get("flight")) == cs]
 
     def reports(self, server, topic, since):
         return self._f("reports.ndjson", "") if not self._f("reports_done.json", {}).get(since) else ""
@@ -1033,7 +1042,17 @@ def narita_row(rec, region, direction):
             "time": on, "rev": chg if chg and chg != on else "",
             "ap": orig.get("name") or orig.get("3LetterCode") or "", "apc": orig.get("3LetterCode") or "",
             "via": "", "term": rec.get("displayTerminal") or "", "status": "" if st in ("共同運航便", "定刻") else st,
-            "cat": cat}
+            "cat": cat, "gate": narita_gate(rec)}
+
+
+def narita_gate(rec):
+    """成田の到着・出発ゲート（変更後を優先）。到着ゲート＝その機体が止まるスポットに対応する"""
+    for g in rec.get("gate") or []:
+        if isinstance(g, dict):
+            v = (g.get("changeGateNo") or g.get("gateNo") or "").strip()
+            if v:
+                return v
+    return ""
 
 
 def row_code(r):
@@ -1056,7 +1075,17 @@ def haneda_row(rec, region, direction):
             "time": on, "rev": chg if chg and chg != on else "", "ap": rec.get("area_name", "") or "",
             "via": rec.get("via_area_name", "") or "", "term": term,
             "status": (st.get("text") or "") if isinstance(st, dict) else "",
-            "cat": (st.get("category") or "") if isinstance(st, dict) else ""}
+            "cat": (st.get("category") or "") if isinstance(st, dict) else "", "gate": haneda_gate(rec)}
+
+
+def haneda_gate(rec):
+    """羽田の出発ゲート（搭乗口）。羽田の公式データには到着ゲート（スポット）が無い"""
+    for o in rec.get("options") or []:
+        if isinstance(o, dict) and o.get("type") in ("gate", "gateDep"):
+            for it in o.get("items") or []:
+                if isinstance(it, dict) and (it.get("name") or "").strip():
+                    return it["name"].strip()
+    return ""
 
 
 def tt_index(tt):
@@ -1511,6 +1540,11 @@ def unusual_equipment(a, aps, ttx, equip, today):
     return None
 
 
+def japanese_reg(reg):
+    reg = (reg or "").upper()
+    return reg.startswith("JA") or bool(re.match(r"^\d{2}-\d{4}$", reg))
+
+
 def returns_expected(reg, sev, orig, dest, aps):
     """その区間の先から撮影拠点へ戻ってくると見込めるか。
     ・日本の航空会社の機体（JA）が撮影拠点から出た区間: 行き先で折り返して戻る（例: JL6でJFK→翌日JL5）
@@ -1528,7 +1562,7 @@ def returns_expected(reg, sev, orig, dest, aps):
 SHIP_DAYS = 28
 
 
-def learn_leg(state, a, nowts, tz):
+def learn_leg(state, a, nowts, tz, strict=False):
     """機材繰り（シップパターン）の学習。同じ機体が続けて飛んだ便を「便A→便B」として数える。
     あわせて「ある航空会社の機体が空港Xに着いた後、次にどこへ飛んだか」も数える"""
     fl = a.get("fl") or a.get("cs")
@@ -1546,7 +1580,9 @@ def learn_leg(state, a, nowts, tz):
         return
     if last and nowts - last["t"] < 20 * 3600:
         # 前の便の到着地から今の便が出ている（途中の便を見落としていない）ときだけ数える
-        if orig is None or last.get("dest") is None or orig == last["dest"]:
+        # strict（注目機以外）: 経路が両方分かっていて、つながっているときだけ
+        if (orig == last.get("dest") and orig) if strict else \
+                (orig is None or last.get("dest") is None or orig == last["dest"]):
             _add_date(ship["fl"].setdefault(f"{last['fl']}>{fl}", []), date)
             _add_date(ship["flout"].setdefault(last["fl"], []), date)
         if last.get("dest") and dest and orig == last["dest"]:
@@ -1604,7 +1640,62 @@ def next_dest_share(ship, airline, x, ic):
     return n, total
 
 
-def process_live(net, cfg, state, watch, now_utc, tz, tt, pa=None):
+def icao_callsign(fl, tt):
+    """便名（NH0006 / NH6 / UAE318）→ ADS-B のコールサイン（ANA6 / UAE318）。航空会社の3レターは時刻表から"""
+    fl = (fl or "").upper()
+    if re.match(r"^[A-Z]{3}\d{1,4}[A-Z]?$", fl):
+        return fl
+    m = re.match(r"^([A-Z0-9]{2})0*(\d{1,4}[A-Z]?)$", fl)
+    if not m:
+        return None
+    cnt = {}
+    for ic, days in tt.items():
+        if ic.startswith("_"):
+            continue
+        for rows in days.values():
+            for r in rows:
+                if r.get("al") and len(r["al"]) == 3 and r["fl"][:2] == m.group(1):
+                    cnt[r["al"]] = cnt.get(r["al"], 0) + 1
+    if not cnt:
+        return None
+    return max(cnt, key=cnt.get) + m.group(2)
+
+
+def probe_targets(prev, cfg, state, watch, tt, nowts, tz):
+    """前回の予報に出ている「有力・傾向」の便と機体のうち、いまの飛行状況を確かめるもの。
+    ・機体番号が分かっていて監視機でないもの → 機体番号で照会（監視機は毎回照会済み）
+    ・機体が分かっていない到着便で、もう出発しているはずの時間帯のもの → 便名で照会（1便20分に1回まで）"""
+    regs, cs = set(), {}
+    checked = state.setdefault("cs_checked", {})
+    for k in [k for k, v in checked.items() if nowts - v > 6 * 3600]:
+        del checked[k]
+    now = dt.datetime.fromtimestamp(nowts, tz)
+    for ic, ap in ((prev or {}).get("airports") or {}).items():
+        g_ap = _geo_any(ic)
+        for d_iso, day in (ap.get("days") or {}).items():
+            for e in day.get("events") or []:
+                if e.get("conf") == "確定" or e.get("past") or e.get("dir") not in ("arr", "dep"):
+                    continue
+                reg = e.get("reg")
+                if reg and reg not in watch and re.match(r"^[A-Z0-9-]{4,8}$", reg):
+                    regs.add(reg)
+                if e["dir"] != "arr" or e.get("hex") or not e.get("fl") or not e.get("time"):
+                    continue
+                t = _ev_dt(e, d_iso, tz)
+                blk = block_min(_geo_any(e.get("otherCode"), e.get("other")), g_ap)
+                blk = 180 if blk is None else blk
+                if not (t - dt.timedelta(minutes=blk + 60) <= now <= t + dt.timedelta(minutes=30)):
+                    continue
+                c = icao_callsign(e["fl"], tt)
+                if not c or nowts - checked.get(c, 0) < 1200:
+                    continue
+                cs[c] = {"ap": ic, "fl": e["fl"], "orig": e.get("otherCode"), "origName": e.get("other"),
+                         "type": e.get("type") if e.get("cat") == "type" else None, "cat": e.get("cat"),
+                         "name": e.get("name"), "t": t.timestamp()}
+    return sorted(regs)[:60], dict(sorted(cs.items(), key=lambda x: x[1]["t"])[:10])
+
+
+def process_live(net, cfg, state, watch, now_utc, tz, tt, pa=None, prev=None):
     """広域走査（150nm）+ 監視機の全世界照会 + 希少機種の全世界照会
     → 在空機・到着予定/折り返し待ちの保持・発着記録・滑走路判定"""
     aps = cfg["airports"]
@@ -1647,6 +1738,30 @@ def process_live(net, cfg, state, watch, now_utc, tz, tt, pa=None):
                     watched_air.append(o)
         except Exception as e:  # noqa: BLE001
             LOG.err("ADS-B 監視機の照会", e)
+
+    # 2b) 予報に出ている便・機体の「いま」を確かめる（FR24 の機体ページで現在の便を見るのと同じこと）
+    probe_regs, probe_cs = probe_targets(prev, cfg, state, watch, tt, nowts, tz)
+    if probe_regs:
+        try:
+            for a in (ac_norm(x) for x in net.regs(probe_regs)):
+                if a["reg"] in probe_regs:
+                    add(a)
+        except Exception as e:  # noqa: BLE001
+            LOG.err("ADS-B 予報の機体の照会", e)
+    found_cs = {}
+    for c, info in probe_cs.items():
+        try:
+            for x in net.callsign(c):
+                a = ac_norm(x)
+                if a["cs"] == c and a["lat"] is not None:
+                    found_cs[c] = (add(a) or a, info)
+                    break
+            state["cs_checked"][c] = nowts
+        except Exception as e:  # noqa: BLE001
+            LOG.err(f"ADS-B 便名の照会 {c}", e)
+            break
+    state["probe_n"] = [len(probe_regs), len(probe_cs), len(found_cs)]
+    probe_hex = {a["hex"] for a, _ in found_cs.values()}
 
     # 3a) 国内線には入らない機材・その空港には来ない機材を、日本周辺で探す（10分おき）。
     #     出発地を飛び立った時点で見つかるので、到着の1〜2時間前に分かる
@@ -1727,7 +1842,8 @@ def process_live(net, cfg, state, watch, now_utc, tz, tt, pa=None):
     for a in sorted(seen.values(), key=lambda a: (0 if a["sev"] in NOTABLE else 1)):
         if not a["cs"] or a["ground"] or a["cs"] in rc or not re.match(r"^[A-Z]{3}\d", a["cs"]):
             continue
-        if a["sev"] in NOTABLE or a["hex"] in near or (a["type"] in dom_types and in_japan(a["lat"], a["lon"])):
+        if a["sev"] in NOTABLE or a["hex"] in near or a["hex"] in probe_hex \
+                or (a["type"] in dom_types and in_japan(a["lat"], a["lon"])):
             ask.append({"callsign": a["cs"], "lat": round(a["lat"], 3), "lng": round(a["lon"], 3)})
     if ask:
         try:
@@ -1756,6 +1872,11 @@ def process_live(net, cfg, state, watch, now_utc, tz, tt, pa=None):
                         break
                 if a["route"]:
                     break
+    # 便名で見つけた機体: 経路が分からなければ、予報の便（出発地 → 撮影拠点）の線上にいるかで確かめる
+    for c, (a, info) in found_cs.items():
+        g_o = _geo_any(info.get("orig"), info.get("origName"))
+        if not a.get("route") and g_o and _route_plausible([g_o[0], info["ap"]], a["lat"], a["lon"]):
+            a["route"] = [g_o[0], info["ap"]]
     live = list(seen.values())
 
     # 4b) 経路が分かった機体のうち、国内線に珍しい機材・その空港に珍しい機材
@@ -1764,6 +1885,13 @@ def process_live(net, cfg, state, watch, now_utc, tz, tt, pa=None):
             u = domestic_unusual(a, cfg, aps)
             if u:
                 a["sev"], a["why"], a["unusual"] = "type", u, True
+
+    # 4c) 機材繰りの学習は注目機に限らず、撮影拠点の近く（45nm圏）を飛ぶ全機で行う。
+    #     羽田は公式データに到着スポットが無いため、「着いた便 → 同じ機体で次に出た便」の組を
+    #     全便で集めてスポットの代わりにする（折り返しの組はダイヤで決まっているので数日でそろう）
+    for a in seen.values():
+        if a["hex"] in near and a["sev"] not in NOTABLE and not a["ground"] and a["gs"]:
+            learn_leg(state, a, nowts, tz, strict=True)
 
     # 5) 到着予定（確定）と折り返し待ちを保持する。洋上では何時間も見えなくなるため、
     #    一度つかんだ到着予定は到着予想時刻まで消さない
@@ -1815,6 +1943,24 @@ def process_live(net, cfg, state, watch, now_utc, tz, tt, pa=None):
                 desc.append({"hex": a["hex"], "reg": a["reg"], "type": a["type"], "cs": a["cs"], "sev": a["sev"],
                              "why": a["why"], "alt": int(a["alt"]), "dist": {k: round(v) for k, v in ds.items()},
                              "lat": round(a["lat"], 3), "lon": round(a["lon"], 3)})
+    # 便名で見つけた機体のうち注目機の区分に入らないもの（例: ふだん A380 の便に今日は 777）も到着予定に入れる。
+    # 予報が「機材変更」だと分かるように理由を付ける（区分は「珍しい運航者」扱いで、接近通知はしない）
+    for c, (a, info) in found_cs.items():
+        route = a.get("route") or []
+        if a["ground"] or not a["gs"] or a["sev"] in NOTABLE or len(route) < 2 or route[-1] != info["ap"]:
+            continue
+        g = (info["ap"],) + tuple(airport_latlon(info["ap"], state))
+        dist = nm_between(a["lat"], a["lon"], g[1], g[2])
+        exp = info.get("type")
+        if exp and a["type"] and not same_family(a["type"], exp):
+            why = f"機材変更: 今日は {a['type']}（ふだんは {exp}）"
+        else:
+            why = a.get("why") or info.get("name") or ""
+        key = f"{a['hex']}|{a['cs'] or '-'}"
+        inb[key] = {"hex": a["hex"], "reg": a["reg"], "type": a["type"], "cs": a["cs"], "fl": a.get("fl"),
+                    "sev": "op", "why": why, "updated": nowts, "dest": info["ap"], "orig": route[0],
+                    "eta": nowts + dist / max(a["gs"], 150) * 3600 + 600, "dist": round(dist), "geo": False,
+                    "probe": True, "first": inb.get(key, {}).get("first", nowts)}
     state["descending"] = sorted(desc, key=lambda x: min(x["dist"].values()))[:12]
     # 緊急信号の機体（画面の先頭に出す）
     emg = []
@@ -2165,12 +2311,27 @@ def build_plan(cfg, state, watch, live, watched_air, tt, wx, now_utc, tz, pa=Non
             "metar": (wx.get(ic) or {}).get("metar"),
             "taf": ((wx.get(ic) or {}).get("taf") or {}).get("raw"),
         }
+        plan["airports"][ic] = ap_out
+    # 発着の候補を全空港・2日分つくってから、機材繰りの予測を加え、両立しない候補を外す
+    pre = {(ic, day.isoformat()): events_for(ic, day, cfg, state, watch, live, watched_air, tt, ttx, now_utc, tz)
+           for ic in cfg["airports"] for day in days}
+    try:
+        chain, spans = rotation_events(cfg, state, watch, tt, pre, now_utc, tz)
+        reconcile(cfg, state, pre, chain, spans, live, now_utc, tz)
+    except Exception as e:  # noqa: BLE001  予測の追加に失敗しても、従来の候補で表示は続ける
+        LOG.err("機材繰りの予測", e)
+    for ic in cfg["airports"]:
+        ap_out = plan["airports"][ic]
+        live_cfg = state.get("runway_live", {}).get(ic)
+        if live_cfg and live_cfg.get("stale"):
+            live_cfg = None
         carry = (live_cfg or {}).get("code")
         for day in days:
             hours, sun = hourly_table(ic, wx, day, tz, live_cfg, now_utc,
                                       start_code=carry if day == days[0] else hours[-1]["cfg"])
-            events = events_for(ic, day, cfg, state, watch, live, watched_air, tt, ttx, now_utc, tz)
+            events = pre[(ic, day.isoformat())]
             for ev in events:
+                finalize_event(ev, ic, day == days[0], now_utc, tz)
                 h = int(ev["time"][:2]) if ev.get("time") else (ev["hours"][0] if ev.get("hours") else 12)
                 row = hours[min(max(h, 0), 23)]
                 ev["rwyCfg"] = row["cfg"]
@@ -2184,7 +2345,6 @@ def build_plan(cfg, state, watch, live, watched_air, tt, wx, now_utc, tz, pa=Non
                 "events": events, "hours": hours, "sun": sun,
                 "summary": summarize(ic, day, events, hours, now_local),
             }
-        plan["airports"][ic] = ap_out
     plan["registry"] = {
         "active": sorted([{"reg": r, **v} for r, v in watch.items()], key=lambda x: x["reg"]),
         "changelog": list(reversed(state.get("changelog", [])[-30:])),
@@ -2277,7 +2437,7 @@ def events_for(ic, day, cfg, state, watch, live, watched_air, tt, ttx, now_utc, 
         if r.get("geo"):
             reason = f"{r['dist']}nm圏内で降下しながら接近中（到着まで{left_txt}・経路情報なし）"
         else:
-            reason = f"{ap_label(r['orig'])}を出発済み・飛行中（到着まで{left_txt}）"
+            reason = f"{ap_label(r['orig'])}を出発済み・飛行中（到着まで{left_txt}）" + ("。便名で照会して確認" if r.get("probe") else "")
         # 到着まで2時間以上ある間は、概算より航空会社の定刻（変更時刻）の方が当てになる
         if tt_row and left >= 2:
             shown = tt_row.get("rev") or tt_row.get("time")
@@ -2297,7 +2457,8 @@ def events_for(ic, day, cfg, state, watch, live, watched_air, tt, ttx, now_utc, 
         ret = predict_return(ic, r, tt, tz, day, state, nowts, cfg["airports"])
         if ret:
             put(ret | {"reg": r.get("reg"), "hex": r["hex"], "type": r.get("type"),
-                       "name": watch.get(r.get("reg"), {}).get("name") or r.get("why"), "cat": r["sev"]})
+                       "name": watch.get(r.get("reg"), {}).get("name") or r.get("why"), "cat": r["sev"],
+                       "src": "return"})
 
     # (C) 時刻表 × 学習した機材（羽田）
     equip = state.get("equip", {})
@@ -2317,12 +2478,13 @@ def events_for(ic, day, cfg, state, watch, live, watched_air, tt, ttx, now_utc, 
                  "cat": "type", "conf": "有力" if rare_n >= 3 else "傾向", "status": r.get("status", ""),
                  "other": r["ap"], "otherCode": row_code(r),
                  "reason": f"直近{len(types)}回中{rare_n}回が{top}", "past": r.get("cat") in ("arrived", "departed")})
-        elif watch_n >= 2 and watch_n / len(regs) >= 0.4:
+        elif watch_n >= 3 and watch_n / len(regs) >= 0.5:
             top = max(set(x for x in regs if x in watch), key=regs.count)
             put({"key": f"{r['dir']}|{r['fl']}", "dir": r["dir"], "time": r["rev"] or r["time"], "sched": r["time"],
                  "fl": r["fl"], "reg": top, "type": None, "name": watch[top]["name"], "cat": "watch", "conf": "傾向",
                  "status": r.get("status", ""), "other": r["ap"], "otherCode": row_code(r),
-                 "reason": f"直近{len(regs)}回中{watch_n}回を{top}が担当", "past": r.get("cat") in ("arrived", "departed")})
+                 "reason": f"直近{len(regs)}回中{watch_n}回を{top}が担当", "past": r.get("cat") in ("arrived", "departed"),
+                 "src": "hist", "score": round(regs.count(top) / len(regs), 2)})
 
     # (D) 監視機の来訪パターン（明日、または今日まだ動いていない機体）
     regdays = state.get("regdays", {})
@@ -2337,7 +2499,8 @@ def events_for(ic, day, cfg, state, watch, live, watched_air, tt, ttx, now_utc, 
         visits = [d for d in window if any(x["ap"] == ic for x in days.get(d, []))]
         flown = set(active_days.get(reg, [])) | {d for d in days}
         flown = [d for d in window if d in flown]
-        if not visits or len(visits) < 2:
+        # 外国の機体は路線を転々とするので、3日以上来ているときだけ
+        if not visits or len(visits) < (2 if japanese_reg(reg) else 3):
             continue
         hours, detail = {}, {}
         for d in visits:
@@ -2359,10 +2522,11 @@ def events_for(ic, day, cfg, state, watch, live, watched_air, tt, ttx, now_utc, 
              "reason": f"直近{H}日で{AIRPORT_INFO.get(ic, {}).get('name', ic)}に来た日 {len(visits)}日"
                        f"（飛行を確認した{len(flown)}日中）",
              "ratio": round(ratio, 2), "visits": len(visits), "hoursDetail": hours_detail,
-             "status": "", "other": "", "past": False})
+             "status": "", "other": "", "past": False, "src": "pattern"})
 
     # (E) レア機の定期性（成田の貨物・軍用機など、時刻表に無いもの）
     dow = day.weekday()
+    dom_cands = domestic_candidate_types(cfg)
     for k, lst in state.get("rare", {}).items():
         ap, direction, ident = k.split("|", 2)
         if ap != ic or (is_today and ident in covered):
@@ -2371,11 +2535,16 @@ def events_for(ic, day, cfg, state, watch, live, watched_air, tt, ttx, now_utc, 
         dates = sorted({x["date"] for x in past})
         if len(dates) < 2:
             continue
+        last = past[-1]
+        # 以前の版で「その空港に珍しい機材」の一覧に入れていたが、外した機種（羽田の E190 など）
+        if last["sev"] == "type" and re.search(r"(には|国内線では)珍しい機材", last.get("why") or "") \
+                and (last.get("type") or "") not in dom_cands:
+            continue
         dows = {dt.date.fromisoformat(x).weekday() for x in dates}
         span = (dt.date.fromisoformat(dates[-1]) - dt.date.fromisoformat(dates[0])).days
         n7 = len([x for x in dates if x >= (day - dt.timedelta(days=7)).isoformat()])
         same_dow = [x for x in past if dt.date.fromisoformat(x["date"]).weekday() == dow]
-        if n7 >= 5 or len(dows) >= 6:
+        if n7 >= 5 or (len(dows) >= 6 and n7 >= 3):
             conf, basis = "有力", past
             reason = f"ほぼ毎日（直近7日中{n7}日）"
         elif span >= 9 and len(dates) >= 4:
@@ -2396,9 +2565,16 @@ def events_for(ic, day, cfg, state, watch, live, watched_air, tt, ttx, now_utc, 
         med = mins[len(mins) // 2] if mins else None
         last = basis[-1]
         cat = "mil" if last["sev"] == "mil" else ("type" if last["sev"] == "type" else "op")
+        # 機体番号は、同じ機体が続けて来ているときだけ出す（便に付いた記録なので機体は日によって違う）
+        regs_b = [x.get("reg") for x in basis if x.get("reg")]
+        reg_show = last.get("reg") if regs_b and regs_b.count(last.get("reg")) >= max(2, 0.6 * len(basis)) else None
+        if cat == "type":
+            types_b = [x.get("type") for x in past if x.get("type")]
+            if types_b.count(last.get("type")) < 2:
+                continue  # 同じ珍しい機材が2回以上入った便だけ
         put({"key": f"{direction}|{ident}", "dir": direction,
              "time": None if med is None else "%02d:%02d" % (med // 60, med % 60), "approx": True,
-             "fl": last.get("cs") or ident, "reg": last.get("reg"), "type": last.get("type"),
+             "fl": last.get("cs") or ident, "reg": reg_show, "type": last.get("type"),
              "name": last.get("why") if last.get("why") and cat != "op" else
                      {"mil": "軍用・政府機", "type": f"希少機種 {last.get('type')}", "op": "珍しい運航者"}[cat],
              "cat": cat, "conf": conf, "status": "", "other": ap_label(last.get("other")),
@@ -2406,24 +2582,28 @@ def events_for(ic, day, cfg, state, watch, live, watched_air, tt, ttx, now_utc, 
 
     out = list(events.values())
     for e in out:
-        e["time"] = hhmm_ok(e.get("time")) or None
-        if e.get("sched"):
-            e["sched"] = hhmm_ok(e["sched"]) or None
-        if not e.get("hours"):
-            e["hours"] = [int(e["time"][:2])] if e.get("time") else []
-        e["ap"] = ic
-        # 今日の便で、時刻を20分以上過ぎたもの（飛行中を除く）は「済」扱い
-        if is_today and e.get("time") and e.get("status") not in ("飛行中", "着陸見込み"):
-            m = _hhmm_to_min(e["time"])
-            now_m = dt.datetime.fromtimestamp(now_utc.timestamp(), tz)
-            if m is not None and m < now_m.hour * 60 + now_m.minute - 20:
-                e["past"] = True
+        finalize_event(e, ic, is_today, now_utc, tz)
     # 珍しい運航者は「確定」以外は出しすぎないように上限
     ops = [e for e in out if e["cat"] == "op" and e["conf"] != "確定"]
     if len(ops) > 12:
         drop = {id(e) for e in sorted(ops, key=lambda e: CONF_W[e["conf"]])[:-12]}
         out = [e for e in out if id(e) not in drop]
     return out
+
+
+def finalize_event(e, ic, is_today, now_utc, tz):
+    e["time"] = hhmm_ok(e.get("time")) or None
+    if e.get("sched"):
+        e["sched"] = hhmm_ok(e["sched"]) or None
+    if not e.get("hours"):
+        e["hours"] = [int(e["time"][:2])] if e.get("time") else []
+    e["ap"] = ic
+    # 今日の便で、時刻を20分以上過ぎたもの（飛行中を除く）は「済」扱い
+    if is_today and e.get("time") and e.get("status") not in ("飛行中", "着陸見込み"):
+        m = _hhmm_to_min(e["time"])
+        now_m = dt.datetime.fromtimestamp(now_utc.timestamp(), tz)
+        if m is not None and m < now_m.hour * 60 + now_m.minute - 20:
+            e["past"] = True
 
 
 def _tt_arrival(tt, ic, fl, after, tz):
@@ -2565,6 +2745,494 @@ def predict_return(ic, r, tt, tz, day, state=None, nowts=None, aps=None):
     return {"key": f"ret|{r['hex']}", "dir": "arr", "time": earliest.strftime("%H:%M"), "approx": True,
             "fl": None, "conf": "傾向", "status": "", "other": ap_label(dest), "otherCode": dest_iata, "past": False,
             "reason": f"{where}。折り返すならこの頃以降"}
+
+
+# --------------------------------------------------------------------------
+# 機材繰り（ローテーション）の予測と、ありえない候補の除去
+#   着いた機体は、着いたスポットから次の便で出る（国内線は1時間ほどの折り返しならほぼ確実）。
+#   ・成田: 公式データに到着ゲートと出発ゲートがある → 同じゲートから次に出る同じ航空会社の便
+#   ・羽田: 公式データに到着ゲートが無い → 全便で学習した「着いた便→同じ機体で次に出た便」の組
+#   ・外国の航空会社: 来た所へ戻る同じ航空会社の最初の便（例: LH716 で来た機体は LH717 で帰る）
+#   出た後は「その便の次に同じ機体が入る便」の学習をたどり、羽田・成田に戻る便を探す。
+#   こうして1機の動きを一本の筋として組み立て、その筋と両立しない「傾向」の候補は外す。
+# --------------------------------------------------------------------------
+MIN_TURN = {"dom": 30, "int": 60}
+
+
+def _to_iata(code):
+    if not code:
+        return None
+    if code in GEO["airports"]:
+        return code
+    for i, c in GEO["airports"].items():
+        if c[0] == code:
+            return i
+    return GEO["ja2iata"].get(code)
+
+
+def _geo_any(code=None, name=None):
+    g = iata_geo(code) if code else None
+    return g or (ja_to_geo(name) if name else None)
+
+
+def block_min(ga, gb):
+    """2地点（(icao, lat, lon)）間の所要時間（分）の目安"""
+    if not ga or not gb:
+        return None
+    d = nm_between(ga[1], ga[2], gb[1], gb[2])
+    if d < 5:
+        return 0
+    return d / (470 if d > 2500 else 430) * 60 + (30 if d > 2500 else 25)
+
+
+def tt_rows_dt(tt, tz):
+    """{ap: {"arr"|"dep": {便名: [(日時, 行)]}, "dep_list": [(日時, 行)]}}（欠航を除く）"""
+    out = {}
+    for ap, days in tt.items():
+        if ap.startswith("_"):
+            continue
+        o = out.setdefault(ap, {"arr": {}, "dep": {}, "dep_list": []})
+        for d_iso, rows in days.items():
+            d = dt.date.fromisoformat(d_iso)
+            for r in rows:
+                if r.get("cat") == "cancelled":
+                    continue
+                m0, m = _hhmm_to_min(r["time"]), _hhmm_to_min(r.get("rev") or r["time"])
+                if m is None:
+                    continue
+                t = dt.datetime.combine(d, dt.time(m // 60, m % 60), tz)
+                if m0 is not None and m < m0 - 12 * 60:
+                    t += dt.timedelta(days=1)  # 変更後の時刻が日付をまたいだ（23:50 → 00:20）
+                o[r["dir"]].setdefault(r["fl"], []).append((t, r))
+                if r["dir"] == "dep":
+                    o["dep_list"].append((t, r))
+        o["dep_list"].sort(key=lambda x: x[0])
+        for k in ("arr", "dep"):
+            for v in o[k].values():
+                v.sort(key=lambda x: x[0])
+    return out
+
+
+def _row_near(idx, ap, direction, fl, t, hours=6):
+    """ap の direction 便 fl のうち、時刻 t に最も近い行"""
+    best = None
+    for tt_, r in ((idx.get(ap) or {}).get(direction) or {}).get(fl or "", []):
+        d = abs((tt_ - t).total_seconds())
+        if d <= hours * 3600 and (best is None or d < best[0]):
+            best = (d, tt_, r)
+    return (best[1], best[2]) if best else (None, None)
+
+
+def _type_note(equip, ap, direction, fl, actype, prev_fl=None, prev_dir="arr"):
+    """その便の機種の実績と、この機体の機種が合うか（合わなくても候補からは外さない）。
+    この機体が前の便（着いた便）でもふだんと違う機材なら、折り返しごと機材が替わっているだけなので下げない"""
+    types = [x[1] for x in (equip.get(f"{ap}|{direction}|{fl}") or []) if x[1]]
+    if len(types) < 2 or not actype:
+        return 1.0, ""
+    if any(same_family(actype, t) for t in types):
+        return 1.0, ""
+    usual = max(set(types), key=types.count)
+    ptypes = [x[1] for x in (equip.get(f"{ap}|{prev_dir}|{prev_fl}") or []) if x[1]] if prev_fl else []
+    if len(ptypes) >= 2 and not any(same_family(actype, t) for t in ptypes):
+        return 1.0, f"。{fl} もふだんは {usual}（機材変更）"
+    return 0.6, f"。ただし {fl} はふだん {usual}"
+
+
+def contact_gate(ap, g):
+    """機体が横付けされるゲートか。バスで行く遠くのスポット用の搭乗口（成田の150番台以降・英字だけ）は
+    いくつものスポットの便が共用するので、ゲートの一致で機体を結び付けられない"""
+    m = re.match(r"^(\d+)", g or "")
+    if not m:
+        return False
+    return int(m.group(1)) < 150 if ap == "RJAA" else True
+
+
+def _same_airline(r, al, pre):
+    if al and r.get("al"):
+        return r["al"] == al
+    return bool(pre) and r["fl"][:2] == pre
+
+
+def turn_after_arrival(ap, a_fl, a_t, a_row, ac, idx, ship):
+    """ap に a_t に着く（着いた）機体が、次に ap から出る便 → (日時, 行, 確からしさ, 根拠) / None"""
+    o = idx.get(ap) or {}
+    deps = o.get("dep_list") or []
+    region = (a_row or {}).get("region") or ("dom" if ac.get("dom") else "int")
+    mt = dt.timedelta(minutes=MIN_TURN.get(region, 45))
+    al, pre = (a_row or {}).get("al"), (a_fl or "")[:2]
+    # 1) 到着ゲート（成田）: 同じゲートから次に出る便が同じ航空会社なら、それがこの機体
+    g = (a_row or {}).get("gate")
+    if g and contact_gate(ap, g):
+        nxt = next(((t, r) for t, r in deps if r.get("gate") == g and t >= a_t + mt - dt.timedelta(minutes=10)), None)
+        if nxt and nxt[0] - a_t <= dt.timedelta(hours=6) and _same_airline(nxt[1], al, pre):
+            hrs = (nxt[0] - a_t).total_seconds() / 3600
+            return nxt[0], nxt[1], (0.92 if hrs <= 4 else 0.7), f"到着ゲート{g}から次に出る同じ航空会社の便"
+    # 2) 学習した折り返しの組（同じ機体が続けて入った便）
+    c, total = ship_next(ship, a_fl) if a_fl else ([], 0)
+    if c and c[0][1] >= 2 and c[0][1] / total >= 0.6:
+        nfl, n = c[0]
+        hit = next(((t, r) for t, r in o.get("dep", {}).get(nfl, [])
+                    if a_t + mt - dt.timedelta(minutes=20) <= t <= a_t + dt.timedelta(hours=30)), None)
+        if hit:
+            return hit[0], hit[1], min(0.92, n / total), f"折り返しの学習: {a_fl} の後は {nfl}（{total}回中{n}回）"
+    # 3) 外国の航空会社の国際線: 来た所へ戻る、同じ航空会社の最初の便
+    if not ac.get("jp") and region == "int" and pre:
+        orig = _to_iata(ac.get("orig")) or (row_code(a_row) if a_row else None)
+        same = [(t, r) for t, r in deps if _same_airline(r, al, pre) and a_t + mt <= t <= a_t + dt.timedelta(hours=20)]
+        back = [x for x in same if orig and row_code(x[1]) == orig]
+        if back:
+            nm = ap_label(orig)
+            return back[0][0], back[0][1], 0.85, f"{nm}から来た機体の折り返し（同じ航空会社で{nm}へ戻る最初の便）"
+        if same and same[0][0] - a_t <= dt.timedelta(hours=5):
+            return same[0][0], same[0][1], 0.45, "同じ航空会社で次に出る便"
+    return None
+
+
+def next_arrival_after_dep(d_fl, d_t, d_row, ap, idx, ship, aps):
+    """ap から d_fl で出た機体が、次に羽田・成田に着く便（学習した機材繰りをたどる）
+    → (空港, 日時, 行, 確からしさ, 経路の説明) / None
+    行き先までの飛行時間・折り返し・戻りの飛行時間を足した時刻より前の便は選ばない（例: 羽田→ヒューストンの便の
+    数時間後にヒューストンからの便が着くことはない）"""
+    cur, prob, path, seen_ = d_fl, 1.0, [], set()
+    g_ap = _geo_any(ap)
+    g_dest = _geo_any(row_code(d_row) if d_row else None, (d_row or {}).get("ap"))
+    out_min = block_min(g_ap, g_dest)
+    out_min = 60 if out_min is None else out_min
+    after = d_t + dt.timedelta(minutes=out_min + 40)
+    for _ in range(6):
+        if not cur or cur in seen_:
+            return None
+        seen_.add(cur)
+        c, total = ship_next(ship, cur)
+        if not c or c[0][1] < 2 or c[0][1] / total < 0.6:
+            return None
+        nxt, n = c[0]
+        prob *= n / total
+        path.append(f"{nxt}（{total}回中{n}回）")
+        hits = []
+        for ap2 in aps:
+            for t, r in ((idx.get(ap2) or {}).get("arr") or {}).get(nxt, []):
+                back = block_min(_geo_any(row_code(r), r.get("ap")), _geo_any(ap2))
+                if after + dt.timedelta(minutes=60 if back is None else back) <= t <= after + dt.timedelta(hours=40):
+                    hits.append((t, ap2, r))
+        if hits:
+            t, ap2, r = min(hits, key=lambda x: x[0])
+            return ap2, t, r, prob, path
+        if any(nxt in ((idx.get(ap2) or {}).get("dep") or {}) for ap2 in aps):
+            return None  # 次が撮影拠点から出る便＝途中の着便を見落としている
+        cur = nxt
+        after += dt.timedelta(minutes=60)
+    return None
+
+
+def _ev_dt(e, d_iso, tz):
+    m = _hhmm_to_min(e.get("time") or "")
+    if m is None:
+        return None
+    return dt.datetime.combine(dt.date.fromisoformat(d_iso), dt.time(m // 60, m % 60), tz)
+
+
+def rotation_anchors(cfg, state, pre, idx, now_utc, tz):
+    """1機ごとに「いま分かっている最新の状態」= 予測の起点。
+    起点: ADS-Bで見た発着（今日・昨夜）、羽田・成田へ飛行中、出て行った先からの戻り便の予測"""
+    aps = cfg["airports"]
+    nowts = now_utc.timestamp()
+    cand = {}
+
+    def offer(hexid, a):
+        if not hexid:
+            return
+        cur = cand.get(hexid)
+        if cur is None:
+            cand[hexid] = a
+        elif a["src"] == "return" and cur["src"] == "return":
+            # 戻り便の候補が羽田・成田の両方にある: 確からしい方、同じなら早い方
+            if (a["prob"], -a["t"].timestamp()) > (cur["prob"], -cur["t"].timestamp()):
+                cand[hexid] = a
+        elif a["t"] > cur["t"]:
+            cand[hexid] = a
+
+    for m in state.get("mv", {}).values():
+        if not m.get("sev") or m["ap"] not in aps or m["dir"] not in ("arr", "dep") or nowts - m["evt"] > 30 * 3600:
+            continue
+        if m["dir"] == "dep" and m.get("basis") == "位置":
+            continue
+        t = dt.datetime.fromtimestamp(m["evt"], tz)
+        _, row = _row_near(idx, m["ap"], m["dir"], m.get("fl"), t)
+        offer(m["hex"], {"dir": m["dir"], "ap": m["ap"], "t": t, "fl": m.get("fl"), "row": row, "prob": 1.0,
+                         "reg": m.get("reg"), "type": m.get("type"), "sev": m["sev"], "why": m.get("why"),
+                         "orig": m.get("other") if m["dir"] == "arr" else None, "src": "mv"})
+    for r in state.get("inbound", {}).values():
+        if r.get("geo") or r["dest"] not in aps:
+            continue
+        t = dt.datetime.fromtimestamp(r["eta"], tz)
+        tr, row = _row_near(idx, r["dest"], "arr", r.get("fl"), t, hours=12)
+        # 到着まで2時間以上ある間は、実測からの概算より航空会社の時刻の方が当てになる（画面の表示と同じ）
+        if tr and r["eta"] - nowts >= 7200:
+            t = tr
+        offer(r["hex"], {"dir": "arr", "ap": r["dest"], "t": t, "fl": r.get("fl"), "row": row, "prob": 1.0,
+                         "reg": r.get("reg"), "type": r.get("type"), "sev": r["sev"], "why": r.get("why"),
+                         "orig": r.get("orig"), "src": "inbound"})
+    # 出て行った機体の戻り便の予測（predict_return）は、出発の記録より新しければ起点にする
+    for (ap, d_iso), evs in pre.items():
+        for e in evs:
+            if e.get("src") != "return" or not e.get("hex"):
+                continue
+            t = _ev_dt(e, d_iso, tz)
+            if not t:
+                continue
+            _, row = _row_near(idx, ap, "arr", e.get("fl"), t)
+            p = e.get("prob") or (0.7 if e["conf"] == "有力" else 0.4)
+            offer(e["hex"], {"dir": "arr", "ap": ap, "t": t, "fl": e.get("fl"), "row": row, "prob": p,
+                             "reg": e.get("reg"), "type": e.get("type"), "sev": e.get("cat"), "why": e.get("name"),
+                             "orig": e.get("otherCode"), "src": "return"})
+    # 起点より後に別の便で飛んでいるのを見た機体は、起点が古い（見落とした動きがある）
+    last = (state.get("ship") or {}).get("last") or {}
+    out = []
+    for h, a in cand.items():
+        lv = last.get(h)
+        if lv and a["src"] == "mv" and lv.get("fl") and lv["fl"] != a.get("fl") \
+                and lv["t"] > a["t"].timestamp() + 1800:
+            continue
+        out.append(dict(a, hex=h))
+    return out
+
+
+def rotation_events(cfg, state, watch, tt, pre, now_utc, tz):
+    """起点から機材繰りをたどった予測の発着 [{..., "ap", "_d"}]"""
+    aps = cfg["airports"]
+    idx = tt_rows_dt(tt, tz)
+    ship = state.get("ship") or {}
+    equip = state.get("equip") or {}
+    now = dt.datetime.fromtimestamp(now_utc.timestamp(), tz)
+    horizon = dt.datetime.combine(now.date() + dt.timedelta(days=2), dt.time(0), tz)
+    out, spans = [], {}
+    for an in rotation_anchors(cfg, state, pre, idx, now_utc, tz):
+        reg = an.get("reg")
+        ac = {"jp": japanese_reg(reg), "type": an.get("type"), "orig": an.get("orig"),
+              "dom": bool(an.get("orig")) and jp_airport(iata_geo(an["orig"])[0] if iata_geo(an["orig"]) else "")}
+        name = watch.get(reg, {}).get("name") or an.get("why")
+        cur = dict(an)
+        prob = an["prob"]
+        for _ in range(12):
+            if cur["dir"] == "arr":
+                if cur["ap"] not in aps:
+                    break
+                res = turn_after_arrival(cur["ap"], cur.get("fl"), cur["t"], cur.get("row"), ac, idx, ship)
+                if not res:
+                    break
+                t, r, p, why = res
+                mult, note = _type_note(equip, cur["ap"], "dep", r["fl"], ac["type"], cur.get("fl"))
+                prob *= p * mult
+                head = f"{cur.get('fl') or '到着便'}（{cur['t'].strftime('%m/%d %H:%M').lstrip('0')}着）の折り返し。"
+                gate = f"。出発ゲート{r['gate']}" if r.get("gate") and "ゲート" not in why else ""
+                ev = {"dir": "dep", "ap": cur["ap"], "t": t, "row": r, "reason": head + why + note + gate}
+                cur = {"dir": "dep", "ap": cur["ap"], "t": t, "fl": r["fl"], "row": r}
+            else:
+                if not ac["jp"]:
+                    break  # 外国の機体は、羽田・成田を出た後どこへ飛ぶか分からない
+                res = next_arrival_after_dep(cur.get("fl"), cur["t"], cur.get("row"), cur["ap"], idx, ship, aps)
+                if not res:
+                    break
+                ap2, t, r, p, path = res
+                prob *= p
+                head = f"{cur.get('fl')}（{cur['t'].strftime('%m/%d %H:%M').lstrip('0')}発）の後、"
+                ev = {"dir": "arr", "ap": ap2, "t": t, "row": r,
+                      "reason": head + "機材繰りの学習: " + " → ".join(path)}
+                cur = {"dir": "arr", "ap": ap2, "t": t, "fl": r["fl"], "row": r}
+            if prob < 0.3 or t >= horizon:
+                break
+            if t < now - dt.timedelta(minutes=30):
+                break  # 起点より後のはずの動きを見ていない＝読みがずれている
+            r = ev["row"]
+            out.append({"key": f"{ev['dir']}|{r['fl']}", "dir": ev["dir"], "time": r.get("rev") or r["time"],
+                        "sched": r["time"], "fl": r["fl"], "reg": reg, "hex": an["hex"], "type": an.get("type"),
+                        "name": name, "cat": an.get("sev") or "watch", "conf": "有力" if prob >= 0.6 else "傾向",
+                        "status": r.get("status", ""), "other": r.get("ap", ""), "otherCode": row_code(r),
+                        "reason": ev["reason"], "past": False, "prob": round(prob, 2), "src": "rot",
+                        "ap": ev["ap"], "_d": ev["t"].date().isoformat(), "gate": r.get("gate") or None})
+            spans.setdefault(an["hex"], [an["t"], t, reg])[1] = t
+    return out, spans
+
+
+def _compatible(a, b):
+    """時刻順に a → b の2つの発着が、同じ1機で両立するか（所要時間の目安で判定）"""
+    gap = (b["t"] - a["t"]).total_seconds() / 60
+    turn = 30
+    ga, gb = _geo_any(a["ap"]), _geo_any(b["ap"])
+    oa, ob = _geo_any(a.get("oc"), a.get("on")), _geo_any(b.get("oc"), b.get("on"))
+
+    def blk(x, y):
+        v = block_min(x, y)
+        return 60 if v is None else v
+
+    if a["dir"] == "arr":
+        if b["dir"] == "dep":
+            need = turn if a["ap"] == b["ap"] else 240
+        else:
+            need = turn + blk(ga, ob) + turn + blk(ob, gb)
+    else:
+        if b["dir"] == "arr":
+            same = oa and ob and nm_between(oa[1], oa[2], ob[1], ob[2]) < 30
+            need = blk(ga, oa) + turn + (blk(oa, gb) if same else blk(oa, ob) + turn + blk(ob, gb))
+        else:
+            need = blk(ga, oa) + turn + blk(oa, gb) + turn
+    return gap >= need * 0.9
+
+
+def _availability(cfg, state, live, now_utc, tz):
+    """いま撮影拠点から離れた所にいる注目機が、最も早くて何時に撮影拠点に来られるか {登録記号: {空港: 日時}}"""
+    aps = cfg["airports"]
+    now = dt.datetime.fromtimestamp(now_utc.timestamp(), tz)
+    out = {}
+    for a in live or []:
+        reg = a.get("reg")
+        if not reg or a.get("lat") is None:
+            continue
+        here = ("", a["lat"], a["lon"])
+        route = a.get("route") or []
+        dest = route[-1] if len(route) >= 2 else None
+        for ic in aps:
+            g_ic = (ic,) + tuple(airport_latlon(ic, state))
+            if a.get("ground"):
+                if nm_between(a["lat"], a["lon"], g_ic[1], g_ic[2]) < 8:
+                    continue
+                t = now + dt.timedelta(minutes=40 + (block_min(here, g_ic) or 0))
+            elif dest and dest in aps:
+                continue
+            elif dest and iata_geo(dest):
+                gd = iata_geo(dest)
+                eta = (nm_between(a["lat"], a["lon"], gd[1], gd[2]) / max(a.get("gs") or 0, 300)) * 60
+                t = now + dt.timedelta(minutes=eta + 10 + 40 + (block_min(gd, g_ic) or 0))
+            else:
+                d = nm_between(a["lat"], a["lon"], g_ic[1], g_ic[2])
+                t = now + dt.timedelta(minutes=d / 480 * 60)
+            out.setdefault(reg, {})[ic] = t
+    # いま信号が見えない機体も、最後に飛んでいた便の行き先にいる（FR24 の機体ページの「最後の便」と同じ考え方）
+    hex2reg = {}
+    for src in (state.get("mv", {}).values(), state.get("inbound", {}).values(), state.get("outbound", {}).values()):
+        for v in src:
+            if v.get("hex") and v.get("reg"):
+                hex2reg[v["hex"]] = v["reg"]
+    for h, lv in ((state.get("ship") or {}).get("last") or {}).items():
+        reg, gd = hex2reg.get(h), iata_geo(lv.get("dest"))
+        if not reg or reg in out or not gd or lv.get("dest") in aps or now.timestamp() - lv["t"] > 30 * 3600:
+            continue
+        land = max(now, dt.datetime.fromtimestamp(lv["t"], tz) + dt.timedelta(minutes=30))
+        for ic in aps:
+            g_ic = (ic,) + tuple(airport_latlon(ic, state))
+            out.setdefault(reg, {})[ic] = land + dt.timedelta(minutes=40 + (block_min(gd, g_ic) or 0))
+    for r in state.get("outbound", {}).values():
+        reg, gd = r.get("reg"), iata_geo(r.get("dest"))
+        if not reg or not gd:
+            continue
+        for ic in aps:
+            g_ic = (ic,) + tuple(airport_latlon(ic, state))
+            t = dt.datetime.fromtimestamp(r["eta_dest"], tz) + dt.timedelta(minutes=40 + (block_min(gd, g_ic) or 0))
+            cur = out.setdefault(reg, {}).get(ic)
+            out[reg][ic] = max(cur, t) if cur else t
+    return out
+
+
+def reconcile(cfg, state, pre, chain, spans, live, now_utc, tz):
+    """機材繰りの予測を加え、それと両立しない・物理的に無理な「傾向」の候補を外す。pre を書き換える"""
+    now = dt.datetime.fromtimestamp(now_utc.timestamp(), tz)
+    # 1) 機材繰りの予測を加える（同じ便の候補があれば、確からしい方を残す）
+    for ev in chain:
+        k = (ev.pop("ap"), ev.pop("_d"))
+        if k not in pre:
+            continue
+        ev["ap"] = k[0]
+        lst = pre[k]
+        cur = next((e for e in lst if e["key"] == ev["key"]), None)
+        if cur is None:
+            lst.append(ev)
+        elif cur.get("src") == "rot":
+            if ev["prob"] > cur["prob"]:  # 2機が同じ便に入る読みになった: 確からしい方
+                lst[lst.index(cur)] = ev
+        elif cur["conf"] != "確定" and not cur.get("reg") and not cur.get("hex") and cur.get("src") is None:
+            # 「○○で運航されることが多い便」より、実際に着く機体から折り返しをたどった予測を優先
+            lst[lst.index(cur)] = ev
+        elif cur["conf"] != "確定" and (CONF_W[ev["conf"]] > CONF_W[cur["conf"]]
+                                        or (ev["conf"] == cur["conf"] and cur.get("src") != "return")):
+            lst[lst.index(cur)] = ev
+    # 2) 筋が組めた機体: その範囲の「傾向」（過去の担当・来訪パターン・定期性）は外す
+    span_reg = {}
+    for h, (t0, t1, reg) in spans.items():
+        if reg:
+            span_reg[reg] = max(span_reg.get(reg, t1), t1)
+    soft = ("hist", "pattern", None)
+    for (ap, d_iso), lst in pre.items():
+        keep = []
+        for e in lst:
+            end = span_reg.get(e.get("reg"))
+            if end and e["conf"] == "傾向" and e.get("src") in soft:
+                t = _ev_dt(e, d_iso, tz)
+                if (t is None and end.date().isoformat() >= d_iso) or (t and t <= end + dt.timedelta(hours=2)):
+                    continue
+            keep.append(e)
+        lst[:] = keep
+    # 3) 残った「傾向」を1機ずつ、確定・有力の動きや現在位置と両立するものだけにする
+    avail = _availability(cfg, state, live, now_utc, tz)
+    by_reg = {}
+    for (ap, d_iso), lst in pre.items():
+        for e in lst:
+            if e.get("reg"):
+                by_reg.setdefault(e["reg"], []).append(((ap, d_iso), e))
+    drop = set()
+    for reg, items in by_reg.items():
+        def node(k, e):
+            return {"t": _ev_dt(e, k[1], tz), "dir": e["dir"], "ap": k[0], "oc": e.get("otherCode"),
+                    "on": e.get("other")}
+        hard = [node(k, e) for k, e in items if e["conf"] != "傾向" and e["dir"] in ("arr", "dep") and _ev_dt(e, k[1], tz)
+                and not (e["conf"] == "有力" and e.get("src") is None)]
+        # 定期性による「有力」（便に付いた記録の機体番号）が、ADS-Bで確かめた動きと両立しなければ機体番号を外す
+        sure = sorted([node(k, e) for k, e in items if e["conf"] == "確定" and e["dir"] in ("arr", "dep")
+                       and _ev_dt(e, k[1], tz)], key=lambda n: n["t"])
+        for k, e in items:
+            if e["conf"] != "有力" or e.get("src") is not None or e["dir"] not in ("arr", "dep") or not _ev_dt(e, k[1], tz):
+                continue
+            n = node(k, e)
+            prev = [x for x in sure if x["t"] < n["t"]]
+            nxt = [x for x in sure if x["t"] > n["t"]]
+            if (prev and not _compatible(prev[-1], n)) or (nxt and not _compatible(n, nxt[0])):
+                e["reg"] = None
+                e["hex"] = None
+            else:
+                hard.append(n)
+        soft_items = [(k, e) for k, e in items if e["conf"] == "傾向" and e["dir"] in ("arr", "dep") and e.get("src") != "rot"]
+        soft_items.sort(key=lambda x: -(x[1].get("score") or 0.5))
+        accepted = sorted(hard, key=lambda n: n["t"])
+        per_day = {}
+        for k, e in soft_items:
+            n = node(k, e)
+            if n["t"] is None:
+                continue
+            av = (avail.get(reg) or {}).get(k[0])
+            ok = not (av and n["t"] < av and n["t"] > now - dt.timedelta(minutes=30))
+            if ok:
+                prev = [x for x in accepted if x["t"] <= n["t"]]
+                nxt = [x for x in accepted if x["t"] > n["t"]]
+                ok = (not prev or _compatible(prev[-1], n)) and (not nxt or _compatible(n, nxt[0]))
+            if ok and per_day.get(k, 0) >= 3:
+                ok = False
+            if not ok:
+                drop.add(id(e))
+                continue
+            per_day[k] = per_day.get(k, 0) + 1
+            accepted.append(n)
+            accepted.sort(key=lambda x: x["t"])
+        # 時刻の無い来訪パターン: 同じ日・空港に具体的な候補があれば重複、来られない日なら外す
+        for k, e in items:
+            if e.get("src") != "pattern" or id(e) in drop:
+                continue
+            same = any(k2 == k and id(e2) not in drop and e2 is not e and e2["dir"] in ("arr", "dep") for k2, e2 in items)
+            av = (avail.get(reg) or {}).get(k[0])
+            day_end = dt.datetime.combine(dt.date.fromisoformat(k[1]) + dt.timedelta(days=1), dt.time(0), tz)
+            if same or (av and av >= day_end - dt.timedelta(hours=2)):
+                drop.add(id(e))
+    for lst in pre.values():
+        lst[:] = [e for e in lst if id(e) not in drop]
 
 
 def _clusters(w, thr_min):
@@ -2912,7 +3580,8 @@ def main():
     watch = watchlist(cfg, state)
     tt = fetch_timetable(net, cfg, state, now_local, tz, data_dir)
     wx = parse_weather(net, cfg, state, now_utc, tz)
-    live, watched_air, area_by_ap = process_live(net, cfg, state, watch, now_utc, tz, tt, pa)
+    prev = load_json(os.path.join(data_dir, "plan.json"), {})
+    live, watched_air, area_by_ap = process_live(net, cfg, state, watch, now_utc, tz, tt, pa, prev)
     state["_watched_air_regs"] = sorted({a["reg"] for a in watched_air if not a["ground"]})
     learn(state, cfg, watch, now_utc, tz, pa)
     rtopic = report_topic(state)
@@ -2935,7 +3604,7 @@ def main():
               "airports": cfg["airports"], "notify": bool(os.environ.get("NTFY_TOPIC")),
               "globalRare": state.get("gtype_n"), "globalVip": state.get("gvip_n"),
               "routesetFail": state.get("routeset_fail", 0), "inbound": len(state.get("inbound", {})),
-              "outbound": len(state.get("outbound", {}))}
+              "outbound": len(state.get("outbound", {})), "probe": state.get("probe_n")}
     plan["status"] = status
     save_json(os.path.join(data_dir, "plan.json"), plan)
     save_json(os.path.join(data_dir, "live.json"), live_json(cfg, live, watched_air, area_by_ap, now_utc))
