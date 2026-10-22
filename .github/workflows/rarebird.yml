@@ -1,10 +1,15 @@
 # レアバード・スコープ: 5分おきに撮影予報を更新して、site ブランチ（GitHub Pages）に公開する
+#
+# 起動のしかたは2通り:
+#   1) 外部の時計（cron-job.org）が5分おきに「Run workflow」を押す … 主役（README「自動更新を確実にする」）
+#   2) GitHub 自身の定期実行 … 予備。GitHub は混雑時にこれを遅らせたり何時間も飛ばしたりする
+# 両方が同時に来ても、直前（3分以内）に更新済みなら計算を省いてすぐ終わる。
 name: rarebird
 
 on:
   schedule:
-    - cron: "*/5 * * * *"        # 5分おき（GitHubの最短間隔。混雑で数分〜十数分遅れることがあります）
-  workflow_dispatch: {}          # 「Run workflow」ボタンで手動実行もできる
+    - cron: "2-59/5 * * * *"     # 予備: 毎時2,7,12…分（混雑する「00分ちょうど」を避ける）
+  workflow_dispatch: {}          # 外部の時計・「Run workflow」ボタンからの起動
 
 permissions:
   contents: write
@@ -27,13 +32,28 @@ jobs:
             || mkdir -p site
           rm -rf site/.git
 
+      - name: 直前に更新済みなら省く
+        id: fresh
+        run: |
+          python3 - <<'EOF' >> "$GITHUB_OUTPUT"
+          import json, datetime
+          try:
+              g = json.load(open("site/data/plan.json"))["generated"]
+              age = (datetime.datetime.now(datetime.timezone.utc) - datetime.datetime.fromisoformat(g)).total_seconds()
+          except Exception:
+              age = 1e9
+          print("skip=" + ("true" if age < 180 else "false"))
+          EOF
+
       - name: 撮影予報を計算する
+        if: steps.fresh.outputs.skip != 'true'
         env:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
           TZ: Asia/Tokyo
         run: python3 rarebird.py --site site
 
       - name: 公開する
+        if: steps.fresh.outputs.skip != 'true'
         run: |
           cd site
           git init -q -b site
@@ -44,6 +64,7 @@ jobs:
           git push -qf "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${GITHUB_REPOSITORY}.git" site
 
       - name: 月1回の生存記録（60日間動きのないリポジトリは定期実行が止められるため）
+        if: steps.fresh.outputs.skip != 'true'
         run: |
           if [ "$(date -u +%d)" = "01" ] && ! grep -qs "$(date -u +%Y-%m)" .keepalive; then
             date -u +%Y-%m > .keepalive
